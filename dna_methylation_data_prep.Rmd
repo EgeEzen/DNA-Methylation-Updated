@@ -1,0 +1,321 @@
+#DNA Methylation Analysis R - integration of Illumina Methylation Microarrays
+
+```{r message=FALSE, warning=FALSE, results = 'hide'}
+version
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install()
+BiocManager::install("jokergoo/IlluminaHumanMethylationEPICv2manifest")
+BiocManager::install("liftOver")
+BiocManager::install("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+BiocManager::install("IlluminaHumanMethylation450kanno.ilmn12.hg19")
+install.packages("~/Desktop/PhD/2024 First Term/DNA Methylation/jokergoo-IlluminaHumanMethylationEPICv2anno.20a1.hg38-702e52a.tar.gz", repos = NULL, type = "source")
+install_github("achilleasNP/IlluminaHumanMethylationEPICmanifest") 
+install_github("achilleasNP/IlluminaHumanMethylationEPICanno.ilm10b5.hg38")
+```
+
+Load the libraries
+
+```{r message=FALSE, warning=FALSE, results = 'hide'}
+#loading those libraries
+library(pheatmap)
+library(gt)
+library(tidyverse)
+library(minfi)
+library(limma)
+library(missMethyl)
+library(minfiData)
+library(DMRcate)
+library(shinyMethyl)
+library(shinyMethylData)
+library(IlluminaHumanMethylationEPICv2anno.20a1.hg38)
+library(IlluminaHumanMethylationEPICv2manifest)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(RColorBrewer)
+library(dplyr)
+library(readr)
+library(ggrepel)
+library(ggthemr)
+library(EnhancedVolcano)
+library(devtools)
+library(envalysis)
+
+```
+
+##Prepare the data, do the QC and filter the values
+
+```{r}
+setwd("/Users/egeezen/Desktop/PhD/2025 First Term/DNA Methylation/")
+baseDir <- "/Users/egeezen/Desktop/PhD/2025 First Term/DNA Methylation/"
+
+#read the patients metadata which also have the data location
+patients<- read_csv("patients_new.csv", col_types=cols(.default = "c")) 
+
+#separate the samples by array type
+m450k_samples <- patients %>% filter(array_type == "450k")
+EPICv1_samples <- patients %>% filter(array_type == "EPICv1")
+EPICv2_samples <- patients %>% filter(array_type == "EPICv2")
+
+#read array types separately
+#EPICv2
+RGset_EPICv2 <- read.metharray.exp(targets = EPICv2_samples) #the rgchannel set
+pd <- pData(RGset_EPICv2) #metadata frame
+
+#EPICv1
+RGset_EPICv1 <- read.metharray.exp(targets = EPICv1_samples) 
+pd1 <- pData(RGset_EPICv1)
+
+#450k
+RGset_450k <- read.metharray.exp(targets = m450k_samples) 
+pd2 <- pData(RGset_450k)
+
+#to calculate p values, create a barplot and filter the rows with low p values (as they aren't reliable)
+detection_p_calculate <- function(RGset,pd){ #accepts RGset and the metadata of it
+  detP <- detectionP(RGset) #calculates the p values
+  failed <- detP>0.01 #cut off is 0.01 in the field
+  df <- tibble( fraction = colMeans(failed), 
+                groups = factor(pd$Final_Group, levels = c("Healthy","VeRA","RA","OA")),
+                names = pd$Patient_Name) #for plot
+  #to force the names to be ordered
+  df <- df[order(df$groups), ]
+  df$names <- factor(df$names,levels=df$names)
+
+  group_colors <- c("Healthy" = "#C1CFA1",
+                  "VeRA" = "#F7CFD8",
+                  "RA" = "#A888B5",
+                  "OA" = "#C5D3E8")
+  
+  p <- ggplot(df, aes(x = names, y = fraction, fill = groups)) +
+  geom_bar(stat = "identity") +
+  geom_hline(yintercept = 0.01, color = "darkgrey") +
+  labs(y = "Mean detection p-values", x = NULL) +
+  scale_fill_manual(values = group_colors)+
+  theme_publish() +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust=1, size = 10),
+    axis.text.y = element_text(size = 8),
+    legend.title = element_blank())
+
+  absent <- apply(detP, 1, function(x) sum(x>0.01)) #create filtering logical vector
+  RGset_filtered <- RGset[absent==0,] #filter the RGset 
+  return(list(plot = p, RGset_filtered = RGset_filtered))
+}
+
+#this is for EPICv2, do the same for EPICv1 and 450k arrays
+plot_and_filtered_set_EPICv2 <- detection_p_calculate(RGset_EPICv2,pData(RGset_EPICv2))
+RGset_filtered_EPICv2 <- plot_and_filtered_set_EPICv2$RGset_filtered
+barplot_EPICv2 <- plot_and_filtered_set_EPICv2$plot 
+print(barplot_EPICv2)
+
+ggsave(file = "QC_bar_plot_EPICv2.png",
+       plot = barplot_EPICv2,
+       dpi = 300, 
+       bg = "transparent", 
+       width = 7, height =4)
+
+#EPICv1
+plot_and_filtered_set_EPICv1 <- detection_p_calculate(RGset_EPICv1,pData(RGset_EPICv1))
+RGset_filtered_EPICv1 <- plot_and_filtered_set_EPICv1$RGset_filtered
+barplot_EPICv1 <- plot_and_filtered_set_EPICv1$plot 
+print(barplot_EPICv1)
+
+ggsave(file = "QC_bar_plot_EPICv1.png",
+       plot = barplot_EPICv1,
+       dpi = 300, 
+       bg = "transparent", 
+       width = 7, height =4)
+
+#450k 
+plot_and_filtered_set_450k <- detection_p_calculate(RGset_450k,pData(RGset_450k))
+RGset_filtered_450k <- plot_and_filtered_set_450k$RGset_filtered
+barplot_450k <- plot_and_filtered_set_450k$plot 
+print(barplot_450k)
+
+ggsave(file = "QC_bar_plot_450k.png",
+       plot = barplot_450k,
+       dpi = 300, 
+       bg = "transparent", 
+       width = 7, height =4)
+
+#doing methylation level calculations using single sample Noob method
+#this method is specifically very important if you want to combine different sets of data
+#single sample method should not do across samples normalization, so you can combine EPICv2 m_values with the EPICv1 or 450k m_values for example 
+ssNoob_filtered_EPICv2 <- preprocessNoob(RGset_filtered_EPICv2, dyeCorr = TRUE,dyeMethod="single")
+ssNoob_filtered_EPICv1 <- preprocessNoob(RGset_filtered_EPICv1, dyeCorr = TRUE,dyeMethod="single")
+ssNoob_filtered_450k <- preprocessNoob(RGset_filtered_450k, dyeCorr = TRUE,dyeMethod="single")
+
+#create a density plot graph using beta-values
+density_plot_create <- function(ssNoob_filtered,pd){
+    beta_mat <- getBeta(ssNoob_filtered) #get the beta_values
+    beta_mat <- data.frame(beta_mat)
+    colnames(beta_mat) <- sub("^X", "",colnames(beta_mat)) #fix the colnames
+    
+    metadata <- as.data.frame(pd) %>%
+      rownames_to_column("Sample") %>%
+      select(Sample, Final_Group, Patient_Name)
+
+    df <-  beta_mat %>%
+      mutate(Probe = rownames(beta_mat)) %>%
+      pivot_longer(
+      cols = -Probe,
+      names_to = "Sample",
+      values_to = "Beta"
+      ) %>% 
+      left_join(metadata,by="Sample")
+    
+    #plotting 
+    group_colors <- c("Healthy" = "#C1CFA1",
+                  "VeRA" = "#F7CFD8",
+                  "RA" = "#A888B5",
+                  "OA" = "#C5D3E8")
+    
+    p <- ggplot(df, aes(x = Beta, color = Final_Group, group = Sample)) +
+      geom_density(size = 0.5, alpha = 1) +
+      scale_color_manual(values = group_colors) +
+      labs(title = "Density Plot of Beta Values", x = "Beta Value", y = "Density") +
+      theme_publish() +
+      theme(legend.title = element_blank())
+    
+   return(p) 
+}
+
+#draw the density plots and save them
+#EPICv2 
+density_plot_EPICv2 <- density_plot_create(ssNoob_filtered_EPICv2,pData(ssNoob_filtered_EPICv2))
+print(density_plot_EPICv2)
+
+ggsave(file = "QC_density_plot_EPICv2.png",
+       plot = density_plot_EPICv2,
+       dpi = 300, 
+       bg = "transparent", 
+       width = 7, height =4)
+
+#EPICv1
+density_plot_EPICv1 <- density_plot_create(ssNoob_filtered_EPICv1,pData(ssNoob_filtered_EPICv1))
+print(density_plot_EPICv1)
+
+ggsave(file = "QC_density_plot_EPICv1.png",
+       plot = density_plot_EPICv1,
+       dpi = 300, 
+       bg = "transparent", 
+       width = 7, height =4)
+
+#450k
+density_plot_450k <- density_plot_create(ssNoob_filtered_450k,pData(ssNoob_filtered_450k))
+print(density_plot_450k)
+
+ggsave(file = "QC_density_plot_450k.png",
+       plot = density_plot_450k,
+       dpi = 300, 
+       bg = "transparent", 
+       width = 7, height =4)
+
+#get the beta values from all samples. From now on we will continue only with beta-values (and/or m-values)
+beta_values_EPICv2 <- getBeta(ssNoob_filtered_EPICv2)
+beta_values_EPICv1 <- getBeta(ssNoob_filtered_EPICv1)
+beta_values_450k <- getBeta(ssNoob_filtered_450k)
+
+#change the column names for readibility
+change_colnames <- function(beta_values ,pd){
+  metadata <- as.data.frame(pd) %>%
+      rownames_to_column("Sample") %>%
+      select(Sample, Patient_Name)
+  new_colnames <- metadata$Patient_Name[match(colnames(beta_values), metadata$Sample)] #match the orders
+  colnames(beta_values) <- new_colnames
+  return(beta_values)
+}
+
+beta_values_EPICv2 <- change_colnames(beta_values_EPICv2,pData(ssNoob_filtered_EPICv2))
+beta_values_EPICv1 <- change_colnames(beta_values_EPICv1,pData(ssNoob_filtered_EPICv1))
+beta_values_450k <- change_colnames(beta_values_450k,pData(ssNoob_filtered_450k))
+
+#save the beta_values as RDS data
+rds_list <- list(EPICv2 = beta_values_EPICv2, EPICv1 = beta_values_EPICv1, m450k = beta_values_450k )
+saveRDS(rds_list, "beta_values_all_separate.rds")
+```
+
+After the QC filtration the number of extracted CpGs per array:
+EPICv2: 928650
+EPICv1:864095
+450k:483439
+
+##Integrate all beta_values of CpGs across arrays and do the annotation according to hg38 genome
+
+```{r}
+#read the beta_values (after QC filtering) if it is not in your environment
+beta_values_all <- readRDS("beta_values_all_separate.rds")
+beta_values_EPICv2 <- beta_values_all$EPICv2
+beta_values_EPICv1 <- beta_values_all$EPICv1
+beta_values_450k <- beta_values_all$m450k
+patients<- read_csv("patients_new.csv", col_types=cols(.default = "c"))
+
+#first merge between EPICv1 and 450k
+merged_beta_values <- merge(beta_values_EPICv1, beta_values_450k, by = "row.names")
+rownames(merged_beta_values) <- merged_beta_values$Row.names
+merged_beta_values$Row.names <- NULL
+
+#check the duplicates in EPICv2 -> the naming in this array is a different
+#there are many probes that have duplicates denoted by BC or TC
+
+#first we get the annotations from Illumina
+annEPICv2 <- getAnnotation(IlluminaHumanMethylationEPICv2anno.20a1.hg38)
+annEPICv2_df <- as.data.frame(annEPICv2)
+#filter annotation dataframe so it only has the CpGs we detected and also in 450k array
+#because at the end we will reduce it to 450k array level
+filtered_annEPICv2_df <- annEPICv2_df %>% 
+  filter(Name %in% rownames(beta_values_EPICv2)) %>%
+  filter(Methyl450_Loci != "")
+#using the filtered annotation file as a reference, reducing EPICv1 beta values matrix
+#and changing the names
+beta_values_EPICv2 <- as.data.frame(beta_values_EPICv2) %>%
+  rownames_to_column("Name") %>%
+  filter(Name %in% rownames(filtered_annEPICv2_df)) %>%
+  left_join(filtered_annEPICv2_df[,c("Name","Methyl450_Loci")],by = "Name") %>%
+  select(!Name)
+#we have to handle the duplicates
+duplicated_rows <- beta_values_EPICv2[duplicated(beta_values_EPICv2$Methyl450_Loci),]
+#to check the ranges of duplicates and flag the ones that have a range bigger than 0.1 (10 percent methylation) 
+range_check <- duplicated_rows %>%
+  group_by(Methyl450_Loci) %>%
+  summarise(across(where(is.numeric), list(min = min, max = max, range = ~max(.) - min(.)))) %>%
+  rowwise() %>%
+  mutate(any_big_diff = any(c_across(ends_with("_range")) > 0.1))
+#now we only get the non stable loci -> the ones that have big range
+non_stable_loci <- range_check %>% 
+  filter(any_big_diff == TRUE) %>%
+  pull(Methyl450_Loci)
+#delete the non_stable_loci from EPICv2 beta values and aggregate (get the mean) the rest
+beta_values_EPICv2 <- beta_values_EPICv2 %>% filter(!Methyl450_Loci %in% non_stable_loci)
+beta_values_EPICv2_agg <- aggregate(. ~ Methyl450_Loci, 
+                                    data = beta_values_EPICv2,
+                                    FUN = mean)
+beta_values_EPICv2_agg <- beta_values_EPICv2_agg %>% column_to_rownames("Methyl450_Loci")
+
+#now finally merging EPICv2 to the others
+merged_beta_values <- merge(merged_beta_values, beta_values_EPICv2_agg, by = "row.names")
+rownames(merged_beta_values) <- merged_beta_values$Row.names
+merged_beta_values$Row.names <- NULL
+
+#prepare the beta_values dataframe and annotation file that matches order
+#the other reference file is more informative so that will be used instead of this one
+#still the code is given below
+filtered_annEPICv2_df_ <- filtered_annEPICv2_df %>%
+  filter(Methyl450_Loci %in% rownames(merged_beta_values)) %>%
+  distinct(Methyl450_Loci, .keep_all = TRUE) %>%   #keep only the one of the duplicated rows
+  {rownames(.) <- NULL; .} %>%  #for some reason this is needed here
+  column_to_rownames("Methyl450_Loci") %>%
+  select(!c("Name","AddressA","AddressB","ProbeSeqA","ProbeSeqB","NextBase","Color","Type","Infinium_Design","Species","Rep_Num","Methyl27_Loci","EPICv1_Loci","Manifest_probe_match","Probe_rs","Probe_maf","SBE_rs","SBE_maf","col","Strand_FR","Strand_TB","Strand_CO","Probe_Type","Methyl450_Enhancer"))
+filtered_annEPICv2_df_ <- filtered_annEPICv2_df_[rownames(merged_beta_values), , drop = FALSE]
+
+#save the final annotation file and merged beta_values
+rds_list_final <- list(merged_beta_values = merged_beta_values, annotation_file = filtered_annEPICv2_df_)
+saveRDS(rds_list_final, "merged_beta_values_and_annotation_file.rds")
+```
+
+EPICv2 was left with 386972 after being reduced to 450k available loci and filtering of the ranges of duplicates.
+(Note: Only 450 loci had beta-value range bigger than 0.1 (10 percent methylation) so they were filtered from EPICv2 array)
+
+After merging the number of CpGs are:
+EPICv1 with 450k: reduced to 449631
+EPICv1+450k with EPICv2. reduced to 360703
+

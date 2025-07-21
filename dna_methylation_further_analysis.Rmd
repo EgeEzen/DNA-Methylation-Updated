@@ -1,0 +1,383 @@
+#DNA Methylation Analysis R - analysis with integrated beta-values
+
+```{r message=FALSE, warning=FALSE, results = 'hide'}
+version
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install()
+```
+
+Load the libraries
+
+```{r message=FALSE, warning=FALSE, results = 'hide'}
+#loading those libraries
+library(pheatmap)
+library(gt)
+library(tidyverse)
+library(minfi)
+library(limma)
+library(missMethyl)
+library(minfiData)
+library(DMRcate)
+library(RColorBrewer)
+library(dplyr)
+library(readr)
+library(ggrepel)
+library(ggthemr)
+library(EnhancedVolcano)
+library(devtools)
+library(envalysis)
+
+```
+
+##Read merged beta values and reference file and do PCAs
+
+The below code shows how SHK482 is an outlier and should be discarded
+If you want to work with the data without the outlier, run the code chunk after this
+For the Y chromosome removed data and annotation file go to the last code chunk 
+```{r}
+setwd("/Users/egeezen/Desktop/PhD/2025 First Term/DNA Methylation/")
+baseDir <- "/Users/egeezen/Desktop/PhD/2025 First Term/DNA Methylation/"
+
+#read the patients metadata 
+patients<- read_csv("patients_new.csv", col_types=cols(.default = "c")) 
+
+#read the RDS object containing beta values and annotation file
+rds_list_final <- readRDS("merged_beta_values_and_annotation_file.rds")
+merged_beta_values <- rds_list_final$merged_beta_values
+annotation_file <- rds_list_final$annotation_file
+
+#do pca analysis and get as a dataframe ->using plotMDS function from limma
+construct_pca_dataframe<- function (merged_beta_values, patients){
+  #the parameters are optimized for our microarray results
+  mds_res <- plotMDS(merged_beta_values,top = 10000, gene.selection = "pairwise", plot = FALSE)
+  leading_var <- mds_res$var.explained  # These are already percentages
+  percentages <- leading_var[1:2]
+  percentages <- round(100 *percentages)
+  # Extract coordinates
+  mds_df <- data.frame(
+    Sample = colnames(merged_beta_values),
+    Dim1 = mds_res$x,
+    Dim2 = mds_res$y
+  )
+  mds_df <- mds_df %>%
+    rename("Sample" = "Patient_Name") %>%
+    left_join( patients,by = "Patient_Name")
+  return(list(mds_df = mds_df, variance = percentages))
+}
+
+pca_results <- construct_pca_dataframe(merged_beta_values, patients)
+
+#construct the PCoA (Principle Coordinate Analysis) plot
+group_colors <- c("Healthy" = "#C1CFA1",
+                  "VeRA" = "#F7CFD8",
+                  "RA" = "#A888B5",
+                  "OA" = "#C5D3E8")
+
+sex_colors <- c("M" = "#E9F5BE",
+                "F" = "#F1BA88")
+
+pca_results$mds_df[,"Final_Group"] = factor(pca_results$mds_df[,"Final_Group"] , levels = c("Healthy","VeRA","RA","OA"))
+
+ggplot(pca_results$mds_df, aes(x = Dim1, y = Dim2, fill = Final_Group)) +
+  geom_point(size = 3, alpha = 1 ,shape = 21, stroke = 0.3, color = "black" ) +
+  scale_fill_manual(values = group_colors) + 
+  xlab(paste0("PC1 (", pca_results$variance[1], "%)")) +
+  ylab(paste0("PC2 (", pca_results$variance[2], "%)")) +
+  theme_publish() +
+  coord_fixed() +
+  labs(fill = "")
+
+
+ggsave(file = "all_before_x_y_removal.png",
+       plot = last_plot(),
+       dpi = 300, 
+       bg = "transparent", 
+       width = 5, height =5)
+
+```
+
+Without the outlier from now on!, exploratory analysis using PCAs
+
+```{r}
+setwd("/Users/egeezen/Desktop/PhD/2025 First Term/DNA Methylation/")
+baseDir <- "/Users/egeezen/Desktop/PhD/2025 First Term/DNA Methylation/"
+
+#read the patients metadata 
+patients<- read_csv("patients_new.csv", col_types=cols(.default = "c")) 
+patients<- patients[-43,] #get rid of the outlier 
+
+#read the RDS object containing beta values and annotation file
+rds_list_final <- readRDS("merged_beta_values_and_annotation_file.rds")
+merged_beta_values <- rds_list_final$merged_beta_values
+annotation_file <- rds_list_final$annotation_file
+merged_beta_values$SHK482 <- NULL #get rid of the outlier 
+
+#put the location information
+patients <- patients %>%
+  mutate(final_location = case_when(
+    location == "thumb" ~ "hand",
+    location == "PIP"   ~ "hand",
+    location == "wrist"   ~ "hand",
+    location == "finger"   ~ "hand",
+    TRUE ~ location))
+
+#do pca analysis and get as a dataframe ->using plotMDS function from limma
+construct_pca_dataframe<- function (merged_beta_values, patients){
+  #the parameters are optimized for our microarray results
+  mds_res <- plotMDS(merged_beta_values,top = 10000, gene.selection = "pairwise", plot = FALSE)
+  leading_var <- mds_res$var.explained  # These are already percentages
+  percentages <- leading_var[1:2]
+  percentages <- round(100 *percentages)
+  # Extract coordinates
+  mds_df <- data.frame(
+    Sample = colnames(merged_beta_values),
+    Dim1 = mds_res$x,
+    Dim2 = mds_res$y
+  )
+  mds_df <- mds_df %>%
+    rename("Sample" = "Patient_Name") %>%
+    left_join( patients,by = "Patient_Name")
+  return(list(mds_df = mds_df, variance = percentages))
+}
+
+pca_results <- construct_pca_dataframe(merged_beta_values, patients)
+
+#construct the PCoA (Principle Coordinate Analysis) plot
+group_colors <- c("Healthy" = "#C1CFA1",
+                  "VeRA" = "#F7CFD8",
+                  "RA" = "#A888B5",
+                  "OA" = "#C5D3E8")
+
+sex_colors <- c("M" = "#E9F5BE",
+                "F" = "#F1BA88")
+
+location_colors <- c(
+  "shoulder" = "#D6CDEA", 
+  "hand"     = "#FDD9C3", 
+  "knee"     = "#B5EAD7",  
+  "ankle"    = "#E9F5BE"   )
+
+pca_results$mds_df$final_location <- factor(patients$final_location, 
+                                            levels = c("shoulder", "hand", "knee", "ankle"))
+
+pca_results$mds_df[,"Final_Group"] = factor(pca_results$mds_df[,"Final_Group"] , levels = c("Healthy","VeRA","RA","OA"))
+
+#in this plot you can change the fill and scale_fill_manual labels to look
+ggplot(pca_results$mds_df, aes(x = Dim1, y = Dim2, fill = Final_Group)) + #change the fill argument here   
+  geom_point(size = 3, alpha = 1 ,shape = 21, stroke = 0.3, color = "black" ) +
+  scale_fill_manual(values = group_colors) + #change the values here
+  xlab(paste0("PC1 (", pca_results$variance[1], "%)")) +
+  ylab(paste0("PC2 (", pca_results$variance[2], "%)")) +
+  theme_publish() +
+  coord_fixed() +
+  labs(fill = "")
+
+#save the plot
+ggsave(file = "group_all_pcoa.png",
+       plot = last_plot(),
+       dpi = 300, 
+       bg = "transparent", 
+       width = 5, height =5)
+
+```
+
+Removing X and Y chromosomes and explore again
+
+```{r}
+#we can pick the X and Y chromosomes from the annotation file
+keep <- !(annotation_file$chr %in% c("chrX","chrY"))
+annotation_file_filtered <- annotation_file[keep,]
+#now we can filter our m_values by removing sex chromosome loci, this will reduce variability significantly
+merged_beta_values_filtered  <- merged_beta_values[keep,]
+
+# you can do subsetting
+# patients_subset <- patients %>% filter(final_location =="hand")
+# subset_beta_values <- merged_beta_values_filtered[,patients_subset$Patient_Name]
+
+#get pca
+pca_results_filtered <- construct_pca_dataframe(merged_beta_values_filtered, patients)
+
+#construct the PCoA (Principle Coordinate Analysis) plot
+pca_results_filtered$mds_df$final_location <- factor(patients$final_location, 
+                                            levels = c("shoulder", "hand", "knee", "ankle"))
+
+pca_results_filtered$mds_df[,"Final_Group"] = factor(pca_results_filtered$mds_df[,"Final_Group"] , levels = c("Healthy","VeRA","RA","OA"))
+
+#in this plot you can change the fill and scale_fill_manual labels to look
+ggplot(pca_results_filtered$mds_df, aes(x = Dim1, y = Dim2, fill = Final_Group)) + #change the fill argument here   
+  geom_point(size = 3, alpha = 1 ,shape = 21, stroke = 0.3, color = "black" ) +
+  scale_fill_manual(values = group_colors) + #change the values here
+  xlab(paste0("PC1 (", pca_results_filtered$variance[1], "%)")) +
+  ylab(paste0("PC2 (", pca_results_filtered$variance[2], "%)")) +
+  #geom_label_repel(aes(label = sex), size = 3,fill=NA) +
+  theme_publish() +
+  coord_fixed() +
+  labs(fill = "")
+
+#save the plot
+ggsave(file = "after_x_y_removal_group_pcoa_.png",
+       plot = last_plot(),
+       dpi = 300, 
+       bg = "transparent", 
+       width = 5, height =5)
+
+```
+
+For future analysis, I keep X chromosome probes but get rid of the Y chromosome reads as they are probably just cross-reactive probes
+
+```{r}
+
+keep <- !(annotation_file$chr == "chrY")
+annotation_file_filtered_Y <- annotation_file[keep,]
+#now we can filter our m_values by removing sex chromosome loci, this will reduce variability significantly
+merged_beta_values_filtered_Y  <- merged_beta_values[keep,]
+
+pca_results_filtered_Y <- construct_pca_dataframe(merged_beta_values_filtered_Y, patients)
+
+pca_results_filtered_Y$mds_df$final_location <- factor(patients$final_location, 
+                                            levels = c("shoulder", "hand", "knee", "ankle"))
+
+pca_results_filtered_Y$mds_df[,"Final_Group"] = factor(pca_results_filtered_Y$mds_df[,"Final_Group"] , levels = c("Healthy","VeRA","RA","OA"))
+
+#in this plot you can change the fill and scale_fill_manual labels to look
+ggplot(pca_results_filtered_Y$mds_df, aes(x = Dim1, y = Dim2, fill = Final_Group)) + #change the fill argument here   
+  geom_point(size = 3, alpha = 1 ,shape = 21, stroke = 0.3, color = "black" ) +
+  scale_fill_manual(values = group_colors) + #change the values here
+  xlab(paste0("PC1 (", pca_results_filtered_Y$variance[1], "%)")) +
+  ylab(paste0("PC2 (", pca_results_filtered_Y$variance[2], "%)")) +
+ # geom_label_repel(aes(label =Patient_Name ), size = 3,fill=NA) +
+  theme_publish() +
+  coord_fixed() +
+  labs(fill = "")
+
+#save the plot
+ggsave(file = "after_y_removal_group_all_pcoa.png",
+       plot = last_plot(),
+       dpi = 300, 
+       bg = "transparent", 
+       width = 5, height =5)
+
+#before saving the annotation file, getting the unique names for genes
+annotation_file_filtered_Y$genesUniq <- sapply(annotation_file_filtered_Y$UCSC_RefGene_Name, function(x) {
+  paste(unique(strsplit(x, ";")[[1]]), collapse = ";")
+})
+#the final beta values and annotation files are saved
+after_y_removal_list <- list(merged_beta_values = merged_beta_values_filtered_Y, annotation_file = annotation_file_filtered_Y, patients = patients)
+
+saveRDS(after_y_removal_list, "merged_beta_values_and_annotation_file_after_filtered.rds")
+```
+
+Look further on PCoA within sample groups (such as joint location)
+You can read the Y chromosome probes removed merged beta values and do exploratory analysis here
+
+```{r}
+setwd("/Users/egeezen/Desktop/PhD/2025 First Term/DNA Methylation/")
+baseDir <- "/Users/egeezen/Desktop/PhD/2025 First Term/DNA Methylation/"
+
+#read the merged beta values, annotation file and patients metadata (if dont have it loaded already)
+filtered_data <- readRDS("merged_beta_values_and_annotation_file_after_filtered.rds")
+merged_beta_values_filtered_Y <- filtered_data$merged_beta_values
+annotation_file_filtered_Y <- filtered_data$annotation_file
+patients <- filtered_data$patients
+
+#do pca analysis and get as a dataframe ->using plotMDS function from limma
+construct_pca_dataframe<- function (merged_beta_values, patients_1){
+  #the parameters are optimized for our microarray results
+  mds_res <- plotMDS(merged_beta_values,top = 10000, gene.selection = "pairwise", plot = FALSE)
+  leading_var <- mds_res$var.explained  # These are already percentages
+  percentages <- leading_var[1:2]
+  percentages <- round(100 *percentages)
+  # Extract coordinates
+  mds_df <- data.frame(
+    Sample = colnames(merged_beta_values),
+    Dim1 = mds_res$x,
+    Dim2 = mds_res$y
+  )
+  #create the mds df
+  mds_df <- mds_df %>%
+    rename("Sample" = "Patient_Name") %>%
+    left_join( patients_1,by = "Patient_Name")
+  #do the factoring
+  mds_df$final_location <- factor(mds_df$final_location, levels = c("shoulder", "hand", "knee", "ankle"))
+  mds_df$Final_Group = factor(mds_df$Final_Group, levels = c("Healthy","VeRA","RA","OA"))
+  return(list(mds_df = mds_df, variance = percentages))
+}
+
+#colors for PCoA (Principle Coordinate Analysis) plot
+group_colors <- c("Healthy" = "#C1CFA1",
+                  "VeRA" = "#F7CFD8",
+                  "RA" = "#A888B5",
+                  "OA" = "#C5D3E8")
+
+sex_colors <- c("M" = "#E9F5BE",
+                "F" = "#F1BA88")
+
+location_colors <- c(
+  "shoulder" = "#D6CDEA", 
+  "hand"     = "#FDD9C3", 
+  "knee"     = "#B5EAD7",  
+  "ankle"    = "#E9F5BE"   )
+  
+#do the subsetting here 
+patients_subset <- patients %>% filter(sex == "F" )
+subset_beta_values <- merged_beta_values_filtered_Y[,patients_subset$Patient_Name]
+
+#continue the exploratory analysis
+pca_results_subset <- construct_pca_dataframe(subset_beta_values, patients_subset)
+
+#in this plot you can change the fill and scale_fill_manual labels to look
+ggplot(pca_results_subset$mds_df, aes(x = Dim1, y = Dim2, fill = Final_Group)) + #change the fill argument here   
+  geom_point(size = 3, alpha = 1 ,shape = 21, stroke = 0.3, color = "black" ) +
+  scale_fill_manual(values = group_colors) + #change the values here
+  xlab(paste0("PC1 (", pca_results_subset$variance[1], "%)")) +
+  #geom_label_repel(aes(label = array_type), size = 3,fill=NA) +
+  ylab(paste0("PC2 (", pca_results_subset$variance[2], "%)")) +
+  theme_publish() +
+  coord_fixed() +
+  labs(fill = "")
+
+#save the plot
+ggsave(file = "only_female_group_pcoa.png",
+       plot = last_plot(),
+       dpi = 300, 
+       bg = "transparent", 
+       width = 5, height =5)
+
+```
+
+With addressing batch effects
+This chunk is linked to the previous one!
+
+```{r}
+#do the subsetting here 
+patients_subset <- patients %>% filter(final_location == "hand" )
+subset_beta_values <- merged_beta_values_filtered_Y[,patients_subset$Patient_Name]
+
+#remove batch effects
+sex_batch <- patients_subset$sex
+design <- model.matrix(~ 1, data = patients_subset)  # no biological covariates
+subset_beta_corrected <- removeBatchEffect(subset_beta_values, batch = sex_batch, design = design)
+
+#continue the exploratory analysis
+pca_results_subset <- construct_pca_dataframe(subset_beta_corrected, patients_subset)
+
+#in this plot you can change the fill and scale_fill_manual labels to look
+ggplot(pca_results_subset$mds_df, aes(x = Dim1, y = Dim2, fill = Final_Group)) + #change the fill argument here   
+  geom_point(size = 3, alpha = 1 ,shape = 21, stroke = 0.3, color = "black" ) +
+  scale_fill_manual(values = group_colors) + #change the values here
+  xlab(paste0("PC1 (", pca_results_subset$variance[1], "%)")) +
+  geom_label_repel(aes(label = sex), size = 3,fill=NA) +
+  ylab(paste0("PC2 (", pca_results_subset$variance[2], "%)")) +
+  theme_publish() +
+  coord_fixed() +
+  labs(fill = "")
+
+#save the plot
+ggsave(file = "knee_batch_effect_from_sex_removed_pcoa_group_.png",
+       plot = last_plot(),
+       dpi = 300, 
+       bg = "transparent", 
+       width = 5, height =5)
+```
+

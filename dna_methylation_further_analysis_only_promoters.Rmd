@@ -1,0 +1,230 @@
+#DNA Methylation Analysis R - analysis with integrated beta-values
+#only promoter regions
+
+```{r message=FALSE, warning=FALSE, results = 'hide'}
+version
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install()
+```
+
+Load the libraries
+
+```{r message=FALSE, warning=FALSE, results = 'hide'}
+#loading those libraries
+library(pheatmap)
+library(gt)
+library(tidyverse)
+library(minfi)
+library(limma)
+library(missMethyl)
+library(minfiData)
+library(DMRcate)
+library(RColorBrewer)
+library(dplyr)
+library(readr)
+library(ggrepel)
+library(ggthemr)
+library(EnhancedVolcano)
+library(devtools)
+library(envalysis)
+
+```
+
+Do PCoA analysis on Y chromosome probes removed merged beta values and do exploratory analysis here
+Only looking at the promoter regions
+
+```{r}
+setwd("/Users/egeezen/Desktop/PhD/2025 First Term/DNA Methylation/")
+baseDir <- "/Users/egeezen/Desktop/PhD/2025 First Term/DNA Methylation/"
+
+#read the merged beta values, annotation file and patients metadata (if dont have it loaded already)
+filtered_data <- readRDS("merged_beta_values_and_annotation_file_after_filtered.rds")
+merged_beta_values_filtered_Y <- filtered_data$merged_beta_values
+annotation_file_filtered_Y <- filtered_data$annotation_file
+patients <- filtered_data$patients
+
+#do pca analysis and get as a dataframe ->using plotMDS function from limma
+construct_pca_dataframe<- function (merged_beta_values, patients_1){
+  #the parameters are optimized for our microarray results
+  mds_res <- plotMDS(merged_beta_values,top = 10000, gene.selection = "pairwise", plot = FALSE)
+  leading_var <- mds_res$var.explained  # These are already percentages
+  percentages <- leading_var[1:2]
+  percentages <- round(100 *percentages)
+  # Extract coordinates
+  mds_df <- data.frame(
+    Sample = colnames(merged_beta_values),
+    Dim1 = mds_res$x,
+    Dim2 = mds_res$y
+  )
+  #create the mds df
+  mds_df <- mds_df %>%
+    rename("Sample" = "Patient_Name") %>%
+    left_join( patients_1,by = "Patient_Name")
+  #do the factoring
+  mds_df$final_location <- factor(mds_df$final_location, levels = c("shoulder", "hand", "knee", "ankle"))
+  mds_df$Final_Group = factor(mds_df$Final_Group, levels = c("Healthy","VeRA","RA","OA"))
+  return(list(mds_df = mds_df, variance = percentages))
+}
+
+#colors for PCoA (Principle Coordinate Analysis) plot
+group_colors <- c("Healthy" = "#C1CFA1",
+                  "VeRA" = "#F7CFD8",
+                  "RA" = "#A888B5",
+                  "OA" = "#C5D3E8")
+
+sex_colors <- c("M" = "#E9F5BE",
+                "F" = "#F1BA88")
+
+location_colors <- c(
+  "shoulder" = "#D6CDEA", 
+  "hand"     = "#FDD9C3", 
+  "knee"     = "#B5EAD7",  
+  "ankle"    = "#E9F5BE"   )
+  
+#pick the promoter regions 
+extended_promoter_annotation <- annotation_file_filtered_Y[
+  grepl("TSS1500|TSS200|5UTR", annotation_file_filtered_Y$UCSC_RefGene_Group) |
+  annotation_file_filtered_Y$Regulatory_Feature_Group == "Promoter_Associated", ]
+
+extended_promoter_merged_value <- merged_beta_values_filtered_Y[rownames(extended_promoter_annotation),]
+
+limited_promoter_annotation <- annotation_file_filtered_Y[
+  grepl("TSS200|5UTR", annotation_file_filtered_Y$UCSC_RefGene_Group),]
+
+limited_promoter_merged_value <- merged_beta_values_filtered_Y[rownames(limited_promoter_annotation),]
+
+#do the pcoa analysis
+pca_results_extended <- construct_pca_dataframe(extended_promoter_merged_value, patients)
+pca_results_limited <- construct_pca_dataframe(limited_promoter_merged_value, patients)
+
+#in this plot you can change the fill and scale_fill_manual labels to look
+ggplot(pca_results_extended$mds_df, aes(x = Dim1, y = Dim2, fill = Final_Group )) + #change the fill argument here   
+  geom_point(size = 3, alpha = 1 ,shape = 21, stroke = 0.3, color = "black" ) +
+  scale_fill_manual(values = group_colors) + #change the values here
+  xlab(paste0("PC1 (", pca_results_extended$variance[1], "%)")) +
+  #geom_label_repel(aes(label = array_type), size = 3,fill=NA) +
+  ylab(paste0("PC2 (", pca_results_extended$variance[2], "%)")) +
+  theme_publish() +
+  coord_fixed() +
+  labs(fill = "")
+
+#save the plot
+ggsave(file = "extended_promoter_group_pcoa.png",
+       plot = last_plot(),
+       dpi = 300, 
+       bg = "transparent", 
+       width = 5, height =5)
+
+#save the extended and limited promoter beta values and annotation files
+
+list_to_save <- list(extended_promoter_merged_beta_values = extended_promoter_merged_value, extended_promoter_annotation = extended_promoter_annotation,limited_promoter_merged_beta_values = limited_promoter_merged_value, limited_promoter_annotation = limited_promoter_annotation)
+
+saveRDS(list_to_save, "promoter_region_merged_beta_values_and_annotations.rds")
+
+```
+
+Removing X and Y chromosomes for promoter-based analysis (Y chromosome was already removed)
+
+```{r}
+keep <- !(extended_promoter_annotation$chr == "chrY"| extended_promoter_annotation$chr == "chrX")
+extended_promoter_annotation_filteredXY <- extended_promoter_annotation[keep,]
+extended_promoter_merged_value_filteredXY  <- extended_promoter_merged_value[keep,]
+
+keep <- !(limited_promoter_annotation$chr == "chrY"| limited_promoter_annotation$chr == "chrX")
+limited_promoter_annotation_filteredXY <- limited_promoter_annotation[keep,]
+limited_promoter_merged_value_filteredXY  <- limited_promoter_merged_value[keep,]
+
+#do the pcoa analysis
+pca_results_extended_filtered <- construct_pca_dataframe(extended_promoter_merged_value_filteredXY, patients)
+pca_results_limited_filtered <- construct_pca_dataframe(limited_promoter_merged_value_filteredXY, patients)
+
+#in this plot you can change the fill and scale_fill_manual labels to look
+ggplot(pca_results_limited_filtered$mds_df, aes(x = Dim1, y = Dim2, fill = final_location )) + #change the fill argument here   
+  geom_point(size = 3, alpha = 1 ,shape = 21, stroke = 0.3, color = "black" ) +
+  scale_fill_manual(values = location_colors  ) + #change the values here
+  xlab(paste0("PC1 (", pca_results_limited_filtered$variance[1], "%)")) +
+  #geom_label_repel(aes(label = age), size = 3,fill=NA) +
+  ylab(paste0("PC2 (", pca_results_limited_filtered$variance[2], "%)")) +
+  theme_publish() +
+  coord_fixed() +
+  labs(fill = "")
+
+#save the plot
+ggsave(file = "limited_promoter_filteredXY_location_pcoa.png",
+       plot = last_plot(),
+       dpi = 300, 
+       bg = "transparent", 
+       width = 5, height =5)
+
+```
+
+Do exploratory PCoA analysis with the X and Y chromosome removed promoter region CpGs
+```{r}
+#subset the patients
+patients_subset <- patients %>% filter(sex == "F")
+subset_beta_values_extended_promoter <- extended_promoter_merged_value_filteredXY[, patients_subset$Patient_Name]
+subset_beta_values_limited_promoter <- limited_promoter_merged_value_filteredXY[,patients_subset$Patient_Name]
+
+#continue the exploratory analysis
+pca_results_subset_extended <- construct_pca_dataframe(subset_beta_values_extended_promoter, patients_subset)
+pca_results_subset_limited <- construct_pca_dataframe(subset_beta_values_limited_promoter, patients_subset)
+
+#in this plot you can change the fill and scale_fill_manual labels to look
+ggplot(pca_results_subset_extended$mds_df, aes(x = Dim1, y = Dim2, fill = final_location)) + #change the fill argument here   
+  geom_point(size = 3, alpha = 1 ,shape = 21, stroke = 0.3, color = "black" ) +
+  scale_fill_manual(values = location_colors) + #change the values here
+  xlab(paste0("PC1 (", pca_results_subset_extended$variance[1], "%)")) +
+  #geom_label_repel(aes(label = age), size = 3,fill=NA) +
+  ylab(paste0("PC2 (", pca_results_subset_extended$variance[2], "%)")) +
+  theme_publish() +
+  coord_fixed() +
+  labs(fill = "")
+
+#save the plot
+ggsave(file = "extended_promoter_filteredXY_location_pcoa_only_female.png",
+       plot = last_plot(),
+       dpi = 300, 
+       bg = "transparent", 
+       width = 5, height =5)
+
+```
+
+With addressing batch effects
+This chunk is linked to the previous one!
+
+```{r}
+#do the subsetting here 
+patients_subset <- patients %>% filter(final_location == "knee")
+subset_beta_values_extended_promoter <- extended_promoter_merged_value_filteredXY[, patients_subset$Patient_Name]
+subset_beta_values_limited_promoter <- limited_promoter_merged_value_filteredXY[,patients_subset$Patient_Name]
+
+#remove batch effects
+sex_batch <- patients_subset$sex
+design <- model.matrix(~ 1, data = patients_subset)  # no biological covariates
+subset_beta_values_extended_promoter_corrected <- removeBatchEffect(subset_beta_values_extended_promoter, batch = sex_batch, design = design)
+subset_beta_values_limited_promoter_corrected <- removeBatchEffect(subset_beta_values_limited_promoter, batch = sex_batch, design = design)
+
+#continue the exploratory analysis
+pca_results_extended_promoter_corrected <- construct_pca_dataframe(subset_beta_values_extended_promoter_corrected, patients_subset)
+pca_results_limited_promoter_corrected <- construct_pca_dataframe(subset_beta_values_limited_promoter_corrected, patients_subset)
+
+#in this plot you can change the fill and scale_fill_manual labels to look
+ggplot(pca_results_extended_promoter_corrected$mds_df, aes(x = Dim1, y = Dim2, fill = Final_Group)) + #change the fill argument here   
+  geom_point(size = 3, alpha = 1 ,shape = 21, stroke = 0.3, color = "black" ) +
+  scale_fill_manual(values = group_colors) + #change the values here
+  xlab(paste0("PC1 (", pca_results_extended_promoter_corrected$variance[1], "%)")) +
+  #geom_label_repel(aes(label = sex), size = 3,fill=NA) +
+  ylab(paste0("PC2 (", pca_results_extended_promoter_corrected$variance[2], "%)")) +
+  theme_publish() +
+  coord_fixed() +
+  labs(fill = "")
+
+#save the plot
+ggsave(file = "extended_promoter_knee_batch_effect_from_sex_removed_pcoa_group.png",
+       plot = last_plot(),
+       dpi = 300, 
+       bg = "transparent", 
+       width = 5, height =5)
+```
+
