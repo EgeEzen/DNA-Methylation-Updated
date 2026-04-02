@@ -1,0 +1,3786 @@
+---
+title: "dna_methylation_ra_vs_oa_further_without_xy_open_regions"
+output: html_document
+date: "2025-07-22"
+---
+
+```{r message=FALSE, warning=FALSE, results = 'hide'}
+
+#loading those libraries
+library(pheatmap)
+library(tidyverse)
+library(DMRcate)
+library(RColorBrewer)
+library(readr)
+library(ggrepel)
+library(ggthemr)
+library(envalysis)
+library(readxl)
+library(rstatix)
+library(VennDiagram)
+library(missMethyl)
+library(methylGSA)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+library(pheatmap)
+library(gridExtra)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(org.Hs.eg.db)
+library(annotatr)
+library(UpSetR)
+library(patchwork)
+library(ComplexUpset)
+library(purrr)
+library(clusterProfiler)
+library(ReactomePA)
+library(GenomicRanges)
+library(ggtext)
+library(scales)
+library(viridisLite)
+library(ggalluvial)
+library(patchwork)
+library(dplyr)
+
+select <- dplyr::select
+count <- dplyr::count
+
+```
+
+#Visualization and Further Analysis on RA vs Healthy across all joints using open regions
+##DMPs related analysis 
+###reading beta values and DMPs
+
+```{r}
+
+setwd("~/Desktop/PhD/2025 First Term/DNA Methylation")
+
+#read the RDS object containing merged beta values and annotation file (after X and Y chromosome probe removed) filtered according to the open region 
+filtered_data <- readRDS("outputs - after xy removal - open regions/open_region_filtered_data_all.rds")
+beta_values_filtered <- filtered_data$beta_values_filtered
+annotation_file_filtered <- filtered_data$annotation_file_filtered
+patients <- filtered_data$patients
+
+#read the RDS object on the results of RA vs Healthy and OA vs Healthy 
+ra_and_oa_vs_healthy_list <- readRDS("outputs - after xy removal - open regions/RA_and_OA_vs_Healthy_filteredChromHMM.rds")
+
+#chromHMM tracks
+#readRDS("chromhmm tracks/")
+
+```
+
+###Doing volcano plots
+
+```{r}
+#do volcano plot
+
+volcano_plot_maker <- function(DMP,name1,name2){
+  #volcano plot x axis is average delta beta and y axis is -log10padj
+  #create a classification column
+  if ("deltaB" %in% colnames(DMP)) {
+    DMP <- DMP %>%
+      mutate(Classification = case_when(
+        (P.Value <= 0.05 & deltaB > 0.1) ~ "Hypermethylated",
+        (P.Value <= 0.05 & deltaB < -0.1) ~ "Hypomethylated",
+        TRUE ~ "Not Significant"
+      ))
+  } else if("deltadeltaB" %in% colnames(DMP)) {
+    DMP <- DMP %>%
+      mutate(Classification = case_when(
+        (P.Value <= 0.05 & deltadeltaB > 0.1) ~ "Hypermethylated",
+        (P.Value <= 0.05 & deltadeltaB < -0.1) ~ "Hypomethylated",
+        TRUE ~ "Not Significant"
+      )) %>%
+      rename("deltaB" = "deltadeltaB")
+}  #calculating the -log10(padj)
+  DMP$log_adjP <- -log10(DMP$P.Value)
+  
+  #selecting points for geom text label
+  gene_names <- annotation_file_filtered %>%
+    rownames_to_column("probes") %>%
+    select(c("probes","genesUniq")) 
+  
+  label_data <- DMP %>%
+    rownames_to_column("probes") %>%
+    filter(Classification %in% c("Hypermethylated", "Hypomethylated")) %>%
+    group_by(Classification) %>%
+    slice_max(order_by = abs(deltaB), n = 30) %>%
+    ungroup() %>%
+    left_join(gene_names, by = "probes")
+  
+  #to add the counts
+  ct <- table(DMP$Classification)
+  
+  #draw the plot
+  p <- ggplot(DMP, aes(x = deltaB, y = log_adjP)) +
+    geom_point(
+    aes(color = Classification),
+    size = 1.5,
+    alpha = 0.7
+    ) +
+    scale_color_manual(
+      values = c(
+        "Hypermethylated" = "#EE4E4E",
+        "Hypomethylated" = "#2A629A",
+        "Not Significant" = "#D3D3D3"
+      ),
+        labels = c(
+      paste0("Hypermethylated (", ct["Hypermethylated"], ")"),
+      paste0("Hypomethylated (", ct["Hypomethylated"], ")"),
+      paste0("Not Significant (", ct["Not Significant"], ")")
+    )
+  )+
+    geom_vline(xintercept = c(-0.1,0.1), linetype = "dashed", color = "black") +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+    labs(
+    title = paste0("Differential Methylation \n",name1," compared to ",name2),
+    x = "Delta Beta",
+    y = "-log10(P-Value)",
+    color = "Classification"
+    ) +   # Increase plot margins if necessary
+    ylim(0,NA) +
+    theme_publish(base_size = 14, base_linewidth = 0.7)+
+      theme(
+      legend.position = "bottom",
+      legend.direction = "vertical",
+      legend.text = element_text(size = 11)
+    ) +
+    geom_label_repel(
+      data = label_data,
+      aes(label = genesUniq),
+      box.padding = unit(0.1, "lines"),
+      segment.color = "#2B2A4C",
+      max.overlaps= 20
+    ) +
+    guides(color = guide_legend(title = "Methylation Level", override.aes = list(size = 3)),alpha= FALSE)
+  
+  ggsave(file = paste0("volcano_plot_",name1,"_vs_",name2,".png"),
+         plot = p,
+         dpi = 300, 
+         bg = "transparent", 
+         width = 6, height =7)
+    ggsave(file = paste0("volcano_plot_",name1,"_vs_",name2,".pdf"),
+         plot = p,
+         dpi = 300, 
+         width = 6, height =7)
+  }
+
+# volcano_plot_maker(ra_and_oa_vs_healthy_list[[1]], "RA ", "Healthy ")
+# volcano_plot_maker(ra_and_oa_vs_healthy_list[[3]], "OA ", "Healthy ")
+# volcano_plot_maker(ra_and_oa_vs_healthy_list[[5]], "RA ", "OA ")
+
+```
+
+
+###Mapping to Illumina CpG annotations and enrichment
+
+```{r}
+
+#---------------------- Illumina CpG annotations
+#prepare the data
+RA_sig <- ra_and_oa_vs_healthy_list[["RA_vs_Healthy_DMPs_significant"]]
+OA_sig <- ra_and_oa_vs_healthy_list[["OA_vs_Healthy_DMPs_significant"]]
+
+RA_all <- ra_and_oa_vs_healthy_list[["RA_vs_Healthy_DMPs"]]
+OA_all <- ra_and_oa_vs_healthy_list[["OA_vs_Healthy_DMPs"]]
+
+# CpG IDs
+RA_sig_cpg <- RA_sig$Row.names
+OA_sig_cpg <- OA_sig$Row.names
+
+# Direction subsets
+RA_sig_hyper <- RA_sig %>% dplyr::filter(deltaB > 0)
+RA_sig_hypo  <- RA_sig %>% dplyr::filter(deltaB < 0)
+
+OA_sig_hyper <- OA_sig %>% dplyr::filter(deltaB > 0)
+OA_sig_hypo  <- OA_sig %>% dplyr::filter(deltaB < 0)
+
+# Shared / unique by CpG id
+shared_cpg <- intersect(RA_sig_cpg, OA_sig_cpg)
+RAuniq_cpg <- setdiff(RA_sig_cpg, OA_sig_cpg)
+OAuniq_cpg <- setdiff(OA_sig_cpg, RA_sig_cpg)
+
+# Keep only direction-consistent shared
+shared_df <- dplyr::inner_join(
+  RA_sig %>% dplyr::select(Row.names, deltaB) %>% dplyr::rename(deltaB_RA = deltaB),
+  OA_sig %>% dplyr::select(Row.names, deltaB) %>% dplyr::rename(deltaB_OA = deltaB),
+  by = "Row.names"
+) %>% dplyr::filter(sign(deltaB_RA) == sign(deltaB_OA))
+
+shared_cpg_dir <- shared_df$Row.names
+
+# helper to extract a df subset by cpg list
+subset_by_cpg <- function(df, cpg) df[df$Row.names %in% cpg, , drop=FALSE]
+
+RAuniq_df <- subset_by_cpg(RA_sig, RAuniq_cpg)
+OAuniq_df <- subset_by_cpg(OA_sig, OAuniq_cpg)
+shared_df2 <- subset_by_cpg(RA_sig, shared_cpg_dir)  # use RA table as carrier for annotations
+
+groups <- list(
+  Shared_hyper = shared_df2 %>% dplyr::filter(deltaB > 0),
+  Shared_hypo  = shared_df2 %>% dplyr::filter(deltaB < 0),
+  RAuniq_hyper = RAuniq_df  %>% dplyr::filter(deltaB > 0),
+  RAuniq_hypo  = RAuniq_df  %>% dplyr::filter(deltaB < 0),
+  OAuniq_hyper = OAuniq_df  %>% dplyr::filter(deltaB > 0),
+  OAuniq_hypo  = OAuniq_df  %>% dplyr::filter(deltaB < 0)
+)
+
+#define the background
+all_cpg <- intersect(rownames(RA_all), rownames(OA_all)) #should be exactly the same
+
+#plot it
+plot_context_frac <- function(df, col, title) {
+
+  df %>%
+    mutate(val = .data[[col]]) %>%
+    tidyr::separate_rows(val, sep=";") %>%
+    filter(!is.na(val), val != "") %>%
+    dplyr::count(val) %>%
+    mutate(frac = n / sum(n)) %>%
+    ggplot(aes(x = reorder(val, frac), y = frac, fill = frac)) +
+
+    geom_col(width = 0.75) +
+
+    scale_fill_viridis_c(
+      option = "viridis",
+      direction = -1,
+      name = "Fraction"
+    ) +
+    coord_flip() +
+    labs(
+      title = title,
+      x = NULL,
+      y = "Fraction of DMPs"
+    ) +
+  theme_publish(base_size = 14, base_linewidth = 0.7) +
+        theme(legend.position = "right")
+
+}
+
+plot_context_frac(groups$RAuniq_hyper, "Relation_to_Island", "RA-unique hyper")
+
+#all of them together
+# Build a long dataframe from your list of group data.frames
+make_context_long <- function(groups_list, col = "Relation_to_Island") {
+
+  bind_rows(lapply(names(groups_list), function(g) {
+    df <- groups_list[[g]]
+    df %>%
+      mutate(group = g,
+             val = .data[[col]]) %>%
+      separate_rows(val, sep=";") %>%
+      filter(!is.na(val), val != "") %>%
+      dplyr::count(group, val, name="n")
+  })) %>%
+    group_by(group) %>%
+    mutate(frac = n / sum(n)) %>%
+    ungroup()
+}
+
+ctx_long <- make_context_long(groups, col="Relation_to_Island")
+
+ctx_long$val <- factor(ctx_long$val, levels = c("Island","Shore","Shelf","OpenSea"))
+ctx_long$group <- factor(ctx_long$group, levels = c("Shared_hyper","Shared_hypo","RAuniq_hyper","RAuniq_hypo","OAuniq_hyper","OAuniq_hypo"))
+
+p_ctx <- ggplot(ctx_long, aes(x = val, y = frac, fill = frac)) +
+  geom_col(width = 0.8) +
+  scale_fill_viridis_c(option="viridis", direction=-1, name="Fraction") +
+  facet_wrap(~ group, ncol = 2) +
+  labs(title="CpG island context across DMP groups",
+       x=NULL, y="Fraction of DMPs") +
+  theme_publish(base_size = 14, base_linewidth = 0.7) +
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+
+ggsave(filename = "dmps_all_cpg_context.pdf",p_ctx, width = 6, height = 6)
+
+#---------------------- Illumina CpG annotations Enrichment
+
+bg_ann <- annotation_file_filtered %>%
+  tibble::rownames_to_column("Row.names") %>%
+  filter(Row.names %in% all_cpg)
+
+fisher_enr <- function(sig_cpg, bg_df, col) {
+  # bg_df must have Row.names and col
+  bg <- bg_df %>% select(Row.names, !!sym(col)) %>%
+    tidyr::separate_rows(!!sym(col), sep=";") %>%
+    filter(!is.na(.data[[col]]), .data[[col]] != "") %>%
+    distinct(Row.names, .data[[col]])
+
+  sig <- intersect(sig_cpg, bg$Row.names)
+  cats <- sort(unique(bg[[col]]))
+
+  res <- lapply(cats, function(ct) {
+    in_cat <- bg$Row.names[bg[[col]] == ct]
+    x11 <- sum(sig %in% in_cat)
+    x12 <- length(sig) - x11
+    bg_not_sig <- setdiff(unique(bg$Row.names), sig)
+    x21 <- sum(bg_not_sig %in% in_cat)
+    x22 <- length(bg_not_sig) - x21
+    ft <- fisher.test(matrix(c(x11,x12,x21,x22), nrow=2, byrow=TRUE))
+    data.frame(category=ct, OR=unname(ft$estimate), p=ft$p.value, sig_in_cat=x11)
+  }) %>% bind_rows()
+
+  res %>% mutate(FDR=p.adjust(p,"BH")) %>% arrange(FDR)
+}
+
+enr_RAuniq_hyper_island <- fisher_enr(groups$RAuniq_hyper$Row.names, bg_ann, "Relation_to_Island")
+enr_RAuniq_hypo_island <- fisher_enr(groups$RAuniq_hypo$Row.names, bg_ann, "Relation_to_Island")
+enr_OAuniq_hyper_island <- fisher_enr(groups$OAuniq_hyper$Row.names, bg_ann, "Relation_to_Island")
+enr_OAuniq_hypo_island <- fisher_enr(groups$OAuniq_hypo$Row.names, bg_ann, "Relation_to_Island")
+enr_Shared_hyper_island <- fisher_enr(groups$Shared_hyper$Row.names, bg_ann, "Relation_to_Island")
+enr_Shared_hypo_island <- fisher_enr(groups$Shared_hypo$Row.names, bg_ann, "Relation_to_Island")
+
+
+#plot it 
+
+plot_enrichment <- function(enr_df, title, top = 15) {
+
+  enr_df %>%
+    slice_head(n = top) %>%
+    ggplot(aes(
+      x = reorder(category, OR),
+      y = OR,
+      fill = OR
+    )) +
+
+    geom_col(width = 0.75) +
+
+    geom_hline(
+      yintercept = 1,
+      linetype = "dashed",
+      linewidth = 0.8,
+      color = "grey40"
+    ) +
+
+    scale_fill_viridis_c(
+      option = "viridis",
+      name = "Odds ratio"
+    ) +
+
+    coord_flip() +
+
+    labs(
+      title = title,
+      x = NULL,
+      y = "Odds ratio vs background"
+    ) +
+
+  theme_publish(base_size = 14, base_linewidth = 0.7) +
+        theme(legend.position = "right")
+}
+
+plot_enrichment(enr_RAuniq_hyper_island, "RA-unique hyper – Island enrichment")
+
+#all of them together
+add_sig_stars <- function(fdr) {
+  ifelse(fdr <= 1e-3, "***",
+         ifelse(fdr <= 1e-2, "**",
+                ifelse(fdr <= 5e-2, "*", "")))
+}
+
+enr_list <- list(
+  Shared_hyper = enr_Shared_hyper_island,
+  Shared_hypo  = enr_Shared_hypo_island,
+  RAuniq_hyper = enr_RAuniq_hyper_island,
+  RAuniq_hypo  = enr_RAuniq_hypo_island,
+  OAuniq_hyper = enr_OAuniq_hyper_island,
+  OAuniq_hypo  = enr_OAuniq_hypo_island
+)
+
+enr_all <- bind_rows(lapply(names(enr_list), function(g) {
+  enr_list[[g]] %>%
+    mutate(group = g,
+           log2OR = log2(OR),
+           neglog10FDR = -log10(FDR),
+           sig = add_sig_stars(FDR))
+}))
+
+#do the factorization
+enr_all$category <- factor(enr_all$category, levels = c("Island","Shore","Shelf","OpenSea"))
+
+enr_all$group <- factor(enr_all$group, levels = c("Shared_hyper","Shared_hypo","RAuniq_hyper","RAuniq_hypo","OAuniq_hyper","OAuniq_hypo"))
+
+#put the labels
+enr_all <- enr_all %>%
+  mutate(label_x = ifelse(log2OR >= 0, log2OR + 0.12, log2OR - 0.12),
+         hjust_lab = ifelse(log2OR >= 0, 0, 1))
+
+p_enr_bar <- ggplot(
+  enr_all,
+  aes(y = category, x = log2OR, fill = log2OR)
+) +
+  geom_vline(xintercept = 0, linetype = "dashed",
+             color = "grey40", linewidth = 0.8) +
+  geom_col(width = 0.75) +
+  scale_x_continuous(
+    expand = expansion(mult = c(0.15, 0.15))
+    )+ 
+  geom_text(aes(x = label_x, label = sig, hjust = hjust_lab),
+            size = 5, color = "grey10") +
+
+  scale_fill_gradient2(
+    low = "#2166AC",   # depletion
+    mid = "grey95",
+    high = "#B2182B",  # enrichment
+    midpoint = 0,
+    name = expression(log[2]~OR)
+  ) +
+
+  facet_wrap(~ group, ncol = 2) +
+
+  labs(
+    title = "Enrichment of CpG island context (vs background)",
+    x = "log2(Odds ratio) (0 = no enrichment)",
+    y = NULL
+  ) +
+
+  theme_publish(base_size = 14, base_linewidth = 0.7) +
+  theme(legend.position = "right")
+
+p_enr_bar
+
+ggsave(filename = "dmps_all_cpg_context_enrichment.pdf",p_enr_bar, width = 8, height = 6)
+
+```
+
+###GO analysis on DMPs
+using gometh from missmethyl library
+
+```{r}
+#example on one 
+do_geo_analysis <- function(sig_loci, all_loci, string1, string2){
+  
+  #run geometh from miss methly
+  gst <- gometh(sig.cpg=as.character(sig_loci$Row.names), 
+              all.cpg=as.character(rownames(all_loci))) 
+  gst$label <- ifelse(gst$FDR < 0.01, "< 0.01", round(gst$FDR, 2))
+
+  #genomic.features = c("TSS1500","TSS200","1stExon") for promoters
+  gst_updated_cc <- gst %>% 
+    arrange(P.DE) %>% 
+    filter(ONTOLOGY == "CC") %>%
+    slice_head(n=20)
+  
+  gst_updated_mf <- gst %>% 
+    arrange(P.DE) %>% 
+    filter(ONTOLOGY == "MF") %>%
+    slice_head(n=20)
+  
+  gst_updated_bp <- gst %>% 
+    arrange(P.DE) %>% 
+    filter(ONTOLOGY == "BP") %>%
+    slice_head(n=20)
+  
+  #visualize it with bar plot
+  title <- paste0(string1, string2)
+  
+  plt_bp <-ggplot(gst_updated_bp, aes(x = reorder(TERM, -DE), y = DE, fill = FDR)) +
+        geom_bar(stat = "identity", alpha = 0.9, width = 0.7) +
+        # geom_text(aes(y = DE + 0.5, label = label), 
+        #     size = 5, hjust = 0, color = "black") +
+        #or
+        geom_text(aes(label = label, hjust = 1.1), size = 5, color = "white") +
+        scale_fill_gradient(low = "#4575b4", high = "#d73027",
+                            limits = c(0, max(gst_updated_bp$FDR, na.rm = TRUE)),
+                            labels = scales::label_number(scale_cut = scales::cut_short_scale())) +
+        coord_flip() +
+        labs(title = paste0(title, " - Biological Process"),
+             x = "Pathway", y = "Number of DMPs", fill = "FDR") +
+        theme_publish(base_size = 14,base_linewidth = 0.7) +
+        theme(plot.title = element_text(size = 16, face = "bold"),
+              legend.position = "bottom", legend.text = element_text(angle = 45))
+  
+  ggsave(filename = paste0(title, "_bp.png"),
+           plot = plt_bp, width = 12, height = 6, bg = "transparent")
+  ggsave(filename = paste0(title, "_bp.pdf"),
+           plot = plt_bp, width = 12, height = 6)
+
+  plt_mf <-ggplot(gst_updated_mf, aes(x = reorder(TERM, -DE), y = DE, fill = FDR)) +
+        geom_bar(stat = "identity", alpha = 0.9, width = 0.7) +
+        # geom_text(aes(y = DE + 0.5, label = label), 
+        #     size = 5, hjust = 0, color = "black") +
+        #or
+        geom_text(aes(label = label, hjust = 1.1), size = 5, color = "white") +
+        scale_fill_gradient(low = "#4575b4", high = "#d73027",
+                            limits = c(0, max(gst_updated_mf$FDR, na.rm = TRUE)),
+                            labels = scales::label_number(scale_cut = scales::cut_short_scale())) +
+        coord_flip() +
+        labs(title = paste0(title, " - Molecular Function"),
+             x = "Pathway", y = "Number of DMPs", fill = "FDR") +
+        theme_publish(base_size = 14,base_linewidth = 0.7) +
+        theme(plot.title = element_text(size = 16, face = "bold"),
+              legend.position = "bottom", legend.text = element_text(angle = 45))
+  
+  ggsave(filename = paste0(title, "_mf.png"),
+           plot = plt_mf, width = 12, height = 6, bg = "transparent")
+  ggsave(filename = paste0(title, "_mf.pdf"),
+           plot = plt_mf, width = 12, height = 6)
+
+
+  plt_cc <-ggplot(gst_updated_cc, aes(x = reorder(TERM, -DE), y = DE, fill = FDR)) +
+        geom_bar(stat = "identity", alpha = 0.9, width = 0.7) +
+        # geom_text(aes(y = DE + 0.5, label = label),
+        #     size = 5, hjust = 0, color = "black") +
+        #or
+        geom_text(aes(label = label, hjust = 1.1), size = 5, color = "white") +
+        scale_fill_gradient(low = "#4575b4", high = "#d73027",
+                            limits = c(0, max(gst_updated_cc$FDR, na.rm = TRUE)),
+                            labels = scales::label_number(scale_cut = scales::cut_short_scale())) +
+        coord_flip() +
+        labs(title = paste0(title, " - Cellular Component"),
+             x = "Pathway", y = "Number of DMPs", fill = "FDR") +
+        theme_publish(base_size = 14,base_linewidth = 0.7) +
+        theme(plot.title = element_text(size = 16, face = "bold"),
+              legend.position = "bottom", legend.text = element_text(angle = 45))
+  
+  ggsave(filename = paste0(title, "_cc.png"),
+           plot = plt_cc, width = 12, height = 6, bg = "transparent")
+  ggsave(filename = paste0(title, "_cc.pdf"),
+           plot = plt_cc, width = 12, height = 6)
+
+  
+}
+
+do_geo_analysis(ra_and_oa_vs_healthy_list[[2]], ra_and_oa_vs_healthy_list[[1]], "RA vs  " , "NIC " )
+# do_geo_analysis(ra_and_oa_vs_healthy_list[[4]], ra_and_oa_vs_healthy_list[[3]], "OA vs " , "NIC" )
+
+```
+
+##DMRs related analysis
+####Overview of the regions
+
+```{r}
+#read the dmr list
+ra_and_oa_vs_healthy_dmr_list <- readRDS("outputs - after xy removal - open regions/RA_vs_Healthy_and_OA_vs_Healthy_dmr_results_filteredChromHMM.rds")
+
+#filter the dmrs according to the abs betavalue diff >= 0.1 
+filter_dmrs <- function(gr, abs_meandiff=0.1) {
+  gr[
+    abs(mcols(gr)$meandiff) >= abs_meandiff
+  ]
+}
+
+RA_vs_Healthy_dmrs <- filter_dmrs(ra_and_oa_vs_healthy_dmr_list$RA_vs_Healthy)
+#646 regions (was 4770 regions before effect size filtration)
+OA_vs_Healthy_dmrs <- filter_dmrs(ra_and_oa_vs_healthy_dmr_list$OA_vs_Healthy)
+#451 regions (was 2604 regions before effect size filtration)
+RA_vs_OA_dmrs <- (ra_and_oa_vs_healthy_dmr_list$RA_vs_OA)
+#1 region (was 4 before)
+
+# Helper: direction split
+split_dir <- function(gr) {
+  list(
+    hyper = gr[mcols(gr)$meandiff > 0],
+    hypo  = gr[mcols(gr)$meandiff < 0]
+  )
+}
+
+# Helper: count shared/unique based on overlap 
+#(minimum overlap percentage doesnt matter, they are perfectly uniform)
+count_shared_unique_strict <- function(A, B, min_frac = 1) {
+
+  hits <- findOverlaps(A, B, ignore.strand = TRUE)
+
+  ov <- pintersect(A[queryHits(hits)], B[subjectHits(hits)])
+
+  frac <- width(ov) / pmin(
+    width(A[queryHits(hits)]),
+    width(B[subjectHits(hits)])
+  )
+
+  keep <- frac >= min_frac
+  hits2 <- hits[keep]
+
+  A_shared_idx <- unique(queryHits(hits2))
+  B_shared_idx <- unique(subjectHits(hits2))
+
+  list(
+    shared = length(A_shared_idx),
+    A_only = length(A) - length(A_shared_idx),
+    B_only = length(B) - length(B_shared_idx)
+  )
+}
+
+ #split them into hyper-, hypo-methylated
+ra_split <- split_dir(RA_vs_Healthy_dmrs)
+oa_split <- split_dir(OA_vs_Healthy_dmrs)
+
+hyper_counts <- count_shared_unique_strict(ra_split$hyper, oa_split$hyper)
+hypo_counts  <- count_shared_unique_strict(ra_split$hypo,  oa_split$hypo)
+
+plot_df_dmr <- tibble(
+  Methylation = rep(c("Hyper", "Hypo"), each = 3),
+  Categories  = rep(c("RA only", "OA only", "Shared"), 2),
+  Count = c(hyper_counts$A_only, hyper_counts$B_only, hyper_counts$shared,
+            hypo_counts$A_only,  hypo_counts$B_only,  hypo_counts$shared)
+) %>%
+  group_by(Methylation) %>%
+  mutate(
+    Total = sum(Count),
+    Percent = Count / Total * 100,
+    Label = sprintf("%d\n(%.1f%%)", Count, Percent)
+  ) %>%
+  ungroup()
+
+bar_plot_dmr <- ggplot(plot_df_dmr, aes(x = Methylation, y = Count, fill = Categories)) +
+  geom_col(width = 0.8) +
+  geom_text(aes(label = Label),
+            position = position_stack(vjust = 0.5),
+            size = 5,
+            color = "grey10") +
+  scale_fill_manual(values = c(
+    "RA only" = "#A888B5",
+    "OA only" = "#C5D3E8",
+    "Shared" = "#F7DB91"
+  )) +
+  ylab("Number of DMRs") +
+  xlab("") +
+  theme_publish(base_size = 15, base_linewidth = 0.6) +
+  theme(axis.text.x = element_text(face = "bold"),
+        legend.position = "right")
+
+ggsave(filename = "bar_plot_ra_oa_dmrs.pdf",bar_plot_dmr, width = 6, height = 6)
+
+#extract the unique and shared regions
+extract_sets_keep_original <- function(RA_gr, OA_gr) {
+  hits <- findOverlaps(RA_gr, OA_gr, ignore.strand = TRUE)
+
+  RA_shared_idx <- unique(queryHits(hits))
+  OA_shared_idx <- unique(subjectHits(hits))
+
+  list(
+    Shared = RA_gr[RA_shared_idx],   # original RA regions overlapping OA 
+    RA_only   = RA_gr[-RA_shared_idx],
+
+   # OA_shared = OA_gr[OA_shared_idx],   # original OA regions overlapping RA
+   # this is always exactly the same as RA_shared
+    OA_only   = OA_gr[-OA_shared_idx],
+
+    hits = hits
+  )
+}
+
+# Use direction splits (metadata is intact)
+res_hyper <- extract_sets_keep_original(ra_split$hyper, oa_split$hyper)
+res_hypo  <- extract_sets_keep_original(ra_split$hypo,  oa_split$hypo)
+
+```
+
+###DMR annotation using annotatr library
+
+```{r}
+#examples of builtin annotations from this library ->  builtin_annotations()
+
+#load annotations
+#note that these are mostly for protein coding genes, some information on niche non coding RNAs could not be found
+annotations <- c(
+  "hg38_enhancers_fantom",
+  "hg38_genes_promoters",
+  "hg38_genes_1to5kb",
+  "hg38_genes_5UTRs",
+  "hg38_genes_exons",
+  "hg38_genes_introns",
+  "hg38_genes_3UTRs",
+  "hg38_genes_intergenic"
+)
+annot_dmr <- build_annotations(genome = 'hg38', annotations = annotations)
+
+#annotate the dmrs, collapse the annotations, rename the regions for better readability
+#then make a binary matrix ready-to-use for upset plotting 
+annotate_dmrs <- function(dmr_gr){
+  
+  region_df <- as.data.frame(dmr_gr) %>%
+    transmute(
+      seqnames, start, end,
+      region_id = paste0(seqnames, ":", start, "-", end),
+      min_smoothed_fdr,
+      meandiff,
+      no.cpgs,
+      width
+    )
+
+  annotated <- annotate_regions(regions = dmr_gr, annotations = annot_dmr, ignore.strand = TRUE)
+
+  ann_df <- as.data.frame(annotated) %>%
+    transmute(
+      seqnames, start, end,
+      region_id = paste0(seqnames, ":", start, "-", end),
+      annot.type,
+      annot.symbol
+    ) %>%
+    mutate(
+      annot.type = case_when(
+        annot.type == "hg38_genes_promoters"  ~ "Promoter",
+        annot.type == "hg38_genes_intergenic" ~ "Intergenic",
+        annot.type == "hg38_enhancers_fantom" ~ "Enhancer",
+        annot.type %in% c("hg38_genes_5UTRs","hg38_genes_3UTRs","hg38_genes_introns","hg38_genes_exons") ~ "Genic",
+        annot.type == "hg38_genes_1to5kb" ~ "Upstream Regulatory",
+        TRUE ~ annot.type
+      )
+    ) %>%
+    distinct()
+
+  # Join back DMRcate stats
+  ann_df <- ann_df %>%
+    left_join(region_df, by = c("region_id","seqnames","start","end"))
+
+  # build binary matrix
+  dmr_annotations <- ann_df %>%
+    select(region_id, annot.type) %>%
+    distinct() %>%
+    mutate(present = 1) %>%
+    tidyr::pivot_wider(names_from = annot.type, values_from = present, values_fill = 0)
+
+  # add regions with zero hits
+  missing_ids <- setdiff(region_df$region_id, dmr_annotations$region_id)
+  if (length(missing_ids) > 0) {
+    missing_mat <- data.frame(region_id = missing_ids)
+    dmr_annotations <- dplyr::bind_rows(dmr_annotations, missing_mat)
+  }
+
+  # ensure Unannotated exists
+  annot_cols <- setdiff(colnames(dmr_annotations), "region_id")
+  if (!"Unannotated" %in% colnames(dmr_annotations)) dmr_annotations$Unannotated <- 0
+  if (length(annot_cols) > 0) {
+    hit_sum <- rowSums(dmr_annotations[, annot_cols, drop=FALSE], na.rm=TRUE)
+    dmr_annotations$Unannotated[is.na(hit_sum) | hit_sum == 0] <- 1
+  } else {
+    dmr_annotations$Unannotated <- 1
+  }
+  #probably doesnt matter, I havent seen unannotated regions
+
+  upset_data <- dmr_annotations %>% select(-region_id) %>% as.data.frame()
+
+  list(
+    dmr_with_annotations = ann_df,         # long format
+    dmr_binary = dmr_annotations,          # includes region_id
+    upset_data = upset_data
+  )
+}
+
+#do annotations for all groups
+ann_shared_hyper <- annotate_dmrs(res_hyper$Shared)
+ann_raonly_hyper <- annotate_dmrs(res_hyper$RA_only)
+ann_oaonly_hyper <- annotate_dmrs(res_hyper$OA_only)
+
+ann_shared_hypo <- annotate_dmrs(res_hypo$Shared)
+ann_raonly_hypo <- annotate_dmrs(res_hypo$RA_only)
+ann_oaonly_hypo <- annotate_dmrs(res_hypo$OA_only)
+
+#put all of them together
+df_all <- bind_rows(
+  ann_shared_hyper$dmr_with_annotations %>% mutate(set="Shared_hyper"),
+  ann_raonly_hyper$dmr_with_annotations %>% mutate(set="RAonly_hyper"),
+  ann_oaonly_hyper$dmr_with_annotations %>% mutate(set="OAonly_hyper"),
+  ann_shared_hypo$dmr_with_annotations %>% mutate(set="Shared_hypo"),
+  ann_raonly_hypo$dmr_with_annotations %>% mutate(set="RAonly_hypo"),
+  ann_oaonly_hypo$dmr_with_annotations %>% mutate(set="OAonly_hypo")
+)
+
+#get a summary
+summary_tbl <- df_all %>%
+  dplyr::count(set, annot.type) %>%
+  group_by(set) %>%
+  mutate(frac = n / sum(n)) %>%
+  ungroup()
+
+summary_tbl
+```
+
+#####Upset Plot with annotated DMRs
+
+```{r}
+# -----------------------------
+# Annotatr UpSet plots (Supplementary Fig. 2)
+# 6 panels: Shared_hyper / Shared_hypo / RAuniq_hyper / RAuniq_hypo / OAuniq_hyper / OAuniq_hypo
+# using ComplexUpset + patchwork
+# -----------------------------
+
+set_names <- c("Genic","Promoter","Upstream Regulatory","Intergenic","Enhancer")
+
+# Ensure all expected annotation columns exist and are logical (ComplexUpset works best with logicals)
+prep_upset_df <- function(df_in, set_names) {
+
+  df_out <- df_in
+
+  # add missing columns as 0
+  for (s in set_names) if (!s %in% colnames(df_out)) df_out[[s]] <- 0
+
+  # keep only these columns, force logical, add row id
+  df_out <- df_out[, set_names, drop = FALSE]
+  df_out[] <- lapply(df_out, function(x) as.logical(as.integer(x)))
+  df_out$.id <- seq_len(nrow(df_out))
+
+  df_out
+}
+
+make_upset_plot <- function(df_in, title, set_names, n_intersections = 10) {
+
+  df_plot <- prep_upset_df(df_in, set_names)
+
+  ComplexUpset::upset(
+    df_plot,
+    intersect = set_names,
+    base_annotations = list(
+      "Intersection size" = intersection_size(text = list(size = 3))
+    ),
+    set_sizes = upset_set_size(),
+    n_intersections = n_intersections
+  ) +
+    ggtitle(title) +
+    theme(
+      plot.title = element_text(face = "bold", size = 12),
+      legend.position = "none"
+    )
+}
+
+# -----------------------------
+# Combine hyper + hypo within each category (row-bind)
+# -----------------------------
+shared_df <- bind_rows(ann_shared_hyper$upset_data, ann_shared_hypo$upset_data)
+raonly_df <- bind_rows(ann_raonly_hyper$upset_data, ann_raonly_hypo$upset_data)
+oaonly_df <- bind_rows(ann_oaonly_hyper$upset_data, ann_oaonly_hypo$upset_data)
+
+upset_list3 <- list(
+  Shared  = shared_df,
+  `RA only` = raonly_df,
+  `OA only` = oaonly_df
+)
+
+plots3 <- imap(upset_list3, ~ make_upset_plot(.x, .y, set_names, n_intersections = 10))
+
+p_sup2 <- wrap_plots(plots3, ncol = 3)
+
+p_sup2
+
+ggsave("annotatr_upset_shared_RAonly_OAonly.pdf", p_sup2, width = 15, height = 5)
+
+```
+
+###DMR annotation with ChromHMM Tracks from fibroblasts
+
+```{r}
+#-----------------------------------------------------------
+# Load ChromHMM tracks
+#-----------------------------------------------------------
+ra_knee_chromhmm_df      <- read.table("chromhmm tracks/ra_knee_368.bed", sep="\t", header=FALSE, stringsAsFactors=FALSE)
+oa_knee_chromhmm_df      <- read.table("chromhmm tracks/oa_knee_335.bed", sep="\t", header=FALSE, stringsAsFactors=FALSE)
+healthy_knee_chromhmm_df <- read.table("chromhmm tracks/healthy_knee_88.bed", sep="\t", header=FALSE, stringsAsFactors=FALSE)
+ra_hand_chromhmm_df      <- read.table("chromhmm tracks/female_ra_hand_316.bed", sep="\t", header=FALSE, stringsAsFactors=FALSE)
+oa_thumb_chromhmm_df     <- read.table("chromhmm tracks/oa_thumb_343.bed", sep="\t", header=FALSE, stringsAsFactors=FALSE)
+ra_shoulder_chromhmm_df  <- read.table("chromhmm tracks/ra_shoulder_341.bed", sep="\t", header=FALSE, stringsAsFactors=FALSE)
+oa_shoulder_chromhmm_df  <- read.table("chromhmm tracks/shoulder_oa_384.bed", sep="\t", header=FALSE, stringsAsFactors=FALSE)
+
+#-----------------------------------------------------------
+# ChromHMM state mapping
+#-----------------------------------------------------------
+chromhmm_state_map <- data.frame(
+  state = paste0("E", 1:18),
+  label = c(
+    "Active TSS","Flanking Active TSS","Transcription at gene 5′ and 3′",
+    "Strong transcription","Weak transcription","Genic enhancer",
+    "Enhancer 1","Enhancer 2","Bivalent/Poised TSS","Bivalent enhancer",
+    "Repressed PolyComb","ZNF genes & repeats","Heterochromatin",
+    "Quiescent/Low","Repetitive/Quiescent","Weak promoter/poised",
+    "Weak enhancer","Repressed/CTCF"
+  ),
+  stringsAsFactors = FALSE
+)
+
+open_states <- c(
+  "Active TSS","Flanking Active TSS","Genic enhancer","Enhancer 1","Enhancer 2",
+  "Strong transcription","Weak transcription","Weak enhancer","Weak promoter/poised",
+  "Transcription at gene 5′ and 3′"
+)
+
+# ===========================================================
+# ChromHMM integration for DMRs (dominant-state assignment)
+# Functions:
+#  - build_chromhmm_gr()
+#  - assign_dmr_state_per_track()
+#  - summarize_state_variability()
+#  - enrichment_fisher_dominant()
+# ===========================================================
+
+# -----------------------------
+# 1) Build ChromHMM GRanges with 18-state labels + collapsed class
+# -----------------------------
+collapse_state_class <- function(label) {
+  dplyr::case_when(
+    label %in% c("Active TSS", "Flanking Active TSS", "Weak promoter/poised", "Bivalent/Poised TSS") ~ "Promoter/TSS",
+    label %in% c("Genic enhancer", "Enhancer 1", "Enhancer 2", "Weak enhancer", "Bivalent enhancer") ~ "Enhancer",
+    label %in% c("Strong transcription", "Weak transcription", "Transcription at gene 5′ and 3′") ~ "Transcription",
+    label %in% c("Repressed PolyComb") ~ "Polycomb/Repressed",
+    label %in% c("Repressed/CTCF") ~ "CTCF/Repressed",
+    label %in% c("Quiescent/Low", "Heterochromatin", "ZNF genes & repeats", "Repetitive/Quiescent") ~ "Quiescent/Other",
+    TRUE ~ "Other"
+  )
+}
+
+build_chromhmm_gr <- function(track_df, state_map, track_name = NA_character_) {
+  stopifnot(ncol(track_df) >= 4)
+  colnames(track_df)[1:4] <- c("chr","start","end","state")
+
+  df <- track_df %>%
+    dplyr::select(chr, start, end, state) %>%
+    dplyr::mutate(
+      state = as.character(state),
+      start = as.integer(start),
+      end   = as.integer(end)
+    ) %>%
+    dplyr::left_join(state_map, by = "state") %>%
+    dplyr::mutate(
+      label = ifelse(is.na(label), state, label),
+      class = collapse_state_class(label),
+      track = track_name
+    )
+
+  GRanges(
+    seqnames = df$chr,
+    ranges   = IRanges(start = df$start, end = df$end),
+    state    = df$state,
+    label    = df$label,
+    class    = df$class,
+    track    = df$track
+  )
+}
+
+# -----------------------------
+# 2) Assign dominant ChromHMM state to each DMR for one track
+#    (dominant = max bp overlap; ties broken by first max)
+# -----------------------------
+assign_dmr_state_per_track <- function(dmrs_gr, track_gr, track_name = NULL) {
+
+  if (is.null(track_name)) {
+    track_name <- unique(mcols(track_gr)$track)
+    if (length(track_name) != 1) track_name <- "track"
+  }
+
+  dmrs_gr <- dmrs_gr
+  mcols(dmrs_gr)$dmr_id <- paste0(seqnames(dmrs_gr), ":", start(dmrs_gr), "-", end(dmrs_gr))
+
+  hits <- findOverlaps(dmrs_gr, track_gr, ignore.strand = TRUE)
+  if (length(hits) == 0) {
+    # return NA assignments for all DMRs
+    return(tibble(
+      dmr_id = mcols(dmrs_gr)$dmr_id,
+      track  = track_name,
+      dom_label = NA_character_,
+      dom_class = NA_character_,
+      dom_state = NA_character_,
+      dom_bp = 0L,
+      dmr_width = width(dmrs_gr),
+      frac_covered = 0
+    ))
+  }
+
+  q <- queryHits(hits)
+  s <- subjectHits(hits)
+
+  ov <- pintersect(dmrs_gr[q], track_gr[s])
+  ov_bp <- width(ov)
+
+  ov_df <- tibble(
+    dmr_id    = mcols(dmrs_gr)$dmr_id[q],
+    track     = track_name,
+    label     = as.character(mcols(track_gr)$label[s]),
+    class     = as.character(mcols(track_gr)$class[s]),
+    state     = as.character(mcols(track_gr)$state[s]),
+    ov_bp     = as.integer(ov_bp)
+  ) %>%
+    group_by(dmr_id, track, label, class, state) %>%
+    summarise(ov_bp = sum(ov_bp), .groups = "drop")
+
+  # pick dominant label by max ov_bp per dmr
+  dom <- ov_df %>%
+    group_by(dmr_id, track) %>%
+    slice_max(order_by = ov_bp, n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    rename(dom_label = label, dom_class = class, dom_state = state, dom_bp = ov_bp)
+
+  # add width and coverage fraction (bp covered by ANY segment in this track)
+  covered <- ov_df %>%
+    group_by(dmr_id, track) %>%
+    summarise(covered_bp = sum(ov_bp), .groups = "drop")
+
+  base <- tibble(
+    dmr_id = mcols(dmrs_gr)$dmr_id,
+    dmr_width = width(dmrs_gr)
+  )
+
+  out <- base %>%
+    left_join(dom, by = "dmr_id") %>%
+    left_join(covered, by = c("dmr_id","track")) %>%
+    mutate(
+      track = ifelse(is.na(track), track_name, track),
+      covered_bp = ifelse(is.na(covered_bp), 0L, covered_bp),
+      frac_covered = covered_bp / dmr_width
+    )
+
+  out
+}
+
+# -----------------------------
+# 3) Summarize state variability across tracks for each DMR
+#    (entropy + majority class fraction + number of classes)
+# -----------------------------
+summarize_state_variability <- function(assignments_df) {
+  # assignments_df: dmr_id, track, dom_class, dom_label ...
+  df <- assignments_df %>%
+    filter(!is.na(dom_class)) %>%
+    group_by(dmr_id) %>%
+    summarise(
+      n_tracks = n(),
+      n_classes = n_distinct(dom_class),
+      majority_class = names(sort(table(dom_class), decreasing = TRUE))[1],
+      majority_frac  = max(table(dom_class)) / n(),
+      entropy = {
+        p <- prop.table(table(dom_class))
+        -sum(p * log2(p))
+      },
+      .groups = "drop"
+    )
+  df
+}
+
+# -----------------------------
+# 4) Fisher enrichment on dominant class/label vs background
+#    Foreground + background are assignment tables (dominant per DMR per track)
+#    We usually summarize per DMR by majority across tracks first.
+# -----------------------------
+majority_call <- function(assignments_df, field = c("dom_class","dom_label")) {
+  field <- match.arg(field)
+  assignments_df %>%
+    filter(!is.na(.data[[field]])) %>%
+    group_by(dmr_id) %>%
+    summarise(
+      call = names(sort(table(.data[[field]]), decreasing = TRUE))[1],
+      .groups = "drop"
+    )
+}
+
+enrichment_fisher_dominant <- function(fg_assign, bg_assign, field = c("dom_class","dom_label")) {
+  field <- match.arg(field)
+
+  fg_call <- majority_call(fg_assign, field = field)
+  bg_call <- majority_call(bg_assign, field = field)
+
+  # universe = all background DMR ids
+  universe <- unique(bg_call$dmr_id)
+  fg_ids <- intersect(unique(fg_call$dmr_id), universe)
+
+  cats <- sort(unique(bg_call$call))
+
+  res <- lapply(cats, function(ct) {
+    bg_in_ct <- bg_call$dmr_id[bg_call$call == ct]
+
+    x11 <- sum(fg_ids %in% bg_in_ct)               # foreground in category
+    x12 <- length(fg_ids) - x11                    # foreground not in category
+    bg_not_fg <- setdiff(universe, fg_ids)
+    x21 <- sum(bg_not_fg %in% bg_in_ct)            # background-only in category
+    x22 <- length(bg_not_fg) - x21                 # background-only not in category
+
+    ft <- fisher.test(matrix(c(x11,x12,x21,x22), nrow = 2, byrow = TRUE))
+
+    data.frame(
+      category = ct,
+      OR = unname(ft$estimate),
+      p = ft$p.value,
+      fg_in_cat = x11,
+      fg_total  = length(fg_ids),
+      stringsAsFactors = FALSE
+    )
+  }) %>% bind_rows() %>%
+    mutate(FDR = p.adjust(p, "BH")) %>%
+    arrange(FDR)
+
+  res
+}
+
+# ===========================================================
+# Build track GRanges 
+# ===========================================================
+chrom_gr_list <- list(
+  RA_knee      = build_chromhmm_gr(ra_knee_chromhmm_df,      chromhmm_state_map, "RA_knee"),
+  OA_knee      = build_chromhmm_gr(oa_knee_chromhmm_df,      chromhmm_state_map, "OA_knee"),
+  Healthy_knee = build_chromhmm_gr(healthy_knee_chromhmm_df, chromhmm_state_map, "Healthy_knee"),
+  RA_hand      = build_chromhmm_gr(ra_hand_chromhmm_df,      chromhmm_state_map, "RA_hand"),
+  OA_thumb     = build_chromhmm_gr(oa_thumb_chromhmm_df,     chromhmm_state_map, "OA_thumb"),
+  RA_shoulder  = build_chromhmm_gr(ra_shoulder_chromhmm_df,  chromhmm_state_map, "RA_shoulder"),
+  OA_shoulder  = build_chromhmm_gr(oa_shoulder_chromhmm_df,  chromhmm_state_map, "OA_shoulder")
+)
+
+# ===========================================================
+# Assign dominant states for each DMR group across all tracks
+# ===========================================================
+assign_across_tracks <- function(dmrs_gr, chrom_gr_list) {
+  bind_rows(lapply(names(chrom_gr_list), function(nm) {
+    assign_dmr_state_per_track(dmrs_gr, chrom_gr_list[[nm]], track_name = nm)
+  }))
+}
+
+assign_shared_hyper <- assign_across_tracks(res_hyper$Shared, chrom_gr_list)
+assign_shared_hypo  <- assign_across_tracks(res_hypo$Shared,  chrom_gr_list)
+
+assign_raonly_hyper <- assign_across_tracks(res_hyper$RA_only, chrom_gr_list)
+assign_raonly_hypo  <- assign_across_tracks(res_hypo$RA_only,  chrom_gr_list)
+
+assign_oaonly_hyper <- assign_across_tracks(res_hyper$OA_only, chrom_gr_list)
+assign_oaonly_hypo  <- assign_across_tracks(res_hypo$OA_only,  chrom_gr_list)
+
+# ===========================================================
+# Variability summaries (entropy/majority fraction etc.)
+# ===========================================================
+var_shared_hyper <- summarize_state_variability(assign_shared_hyper)
+var_shared_hypo <- summarize_state_variability(assign_shared_hypo)
+
+var_raonly_hyper <- summarize_state_variability(assign_raonly_hyper)
+var_raonly_hypo<- summarize_state_variability(assign_raonly_hypo)
+
+var_oaonly_hyper <- summarize_state_variability(assign_oaonly_hyper)
+var_oaonly_hypo <- summarize_state_variability(assign_oaonly_hypo)
+
+# ===========================================================
+# Visualize Dominant Class Distribution Across Tracks
+# ===========================================================
+
+# combine assignment tables
+assign_all <- bind_rows(
+  assign_shared_hyper %>% mutate(fg_set="Shared_hyper"),
+  assign_shared_hypo  %>% mutate(fg_set="Shared_hypo"),
+  assign_raonly_hyper %>% mutate(fg_set="RA_only_hyper"),
+  assign_raonly_hypo  %>% mutate(fg_set="RA_only_hypo"),
+  assign_oaonly_hyper %>% mutate(fg_set="OA_only_hyper"),
+  assign_oaonly_hypo  %>% mutate(fg_set="OA_only_hypo")
+)
+
+fg_levels <- c("Shared_hyper","Shared_hypo","RA_only_hyper","RA_only_hypo","OA_only_hyper","OA_only_hypo")
+class_levels <- c("Promoter/TSS","Enhancer","Transcription","CTCF/Repressed","Polycomb/Repressed","Quiescent/Other")
+track_levels <- c("Healthy_knee","RA_knee","RA_shoulder","RA_hand","OA_knee","OA_shoulder","OA_thumb")
+
+assign_all2 <- assign_all %>%
+  mutate(
+    fg_set = factor(fg_set, levels = fg_levels),
+    dom_class = factor(dom_class, levels = class_levels),
+    track = factor(track, levels = track_levels)
+  ) %>%
+  filter(!is.na(dom_class))
+
+dist_tbl <- assign_all2 %>%
+  dplyr::count(fg_set, track, dom_class, name="n") %>%
+  group_by(fg_set, track) %>%
+  mutate(frac = n / sum(n)) %>%
+  ungroup()
+
+p_domclass_bytrack <- ggplot(dist_tbl, aes(x = track, y = frac, fill = dom_class)) +
+  geom_col(width = 0.85) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_fill_viridis_d(option="plasma", end=0.9, name="Dominant class", direction = 1) +
+  facet_wrap(~ fg_set, ncol = 2) +
+  labs(
+    title = "Dominant ChromHMM class per track",
+    x = NULL, y = "Fraction of DMRs"
+  ) +
+  theme_publish(base_size = 13, base_linewidth = 0.6) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    strip.text = element_text(face="bold")
+  )
+ggsave("chromHMM_majority_frac.pdf", p_domclass_bytrack, width=9, height=7)
+
+# ===========================================================
+# Visualize Variability Across Tracks (Stability of Chromatin Annotation)
+# ===========================================================
+
+var_all <- bind_rows(
+  var_shared_hyper %>% mutate(fg_set="Shared_hyper"),
+  var_shared_hypo  %>% mutate(fg_set="Shared_hypo"),
+  var_raonly_hyper %>% mutate(fg_set="RA_only_hyper"),
+  var_raonly_hypo  %>% mutate(fg_set="RA_only_hypo"),
+  var_oaonly_hyper %>% mutate(fg_set="OA_only_hyper"),
+  var_oaonly_hypo  %>% mutate(fg_set="OA_only_hypo")
+) %>%
+  mutate(
+    fg_set = factor(fg_set, levels = fg_levels),
+    majority_frac = as.numeric(majority_frac)
+  )
+
+mf_tbl <- var_all %>%
+  dplyr::count(fg_set, majority_frac) %>%
+  group_by(fg_set) %>%
+  mutate(frac = n / sum(n)) %>%
+  ungroup()
+
+p_majority_frac <- ggplot(mf_tbl, aes(x = factor(majority_frac), y = frac, fill = frac)) +
+  geom_col(width=0.85) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_fill_viridis_c(option="D", end=0.9, name="Fraction") +
+  facet_wrap(~ fg_set, ncol=3) +
+  labs(
+    title = "Stability of dominant class across tracks",
+    x = "Majority fraction (fraction of tracks sharing the same dominant class)",
+    y = "Fraction of DMRs"
+  ) +
+  theme_publish(base_size = 13, base_linewidth = 0.6) +
+  theme(
+    axis.text.x = element_text(angle=45, hjust=1),
+    legend.position="right",
+    strip.text = element_text(face="bold")
+  )
+
+p_majority_frac
+
+# ===========================================================
+# Visualize Entropy Distribution (Stability of Chromatin Annotation)
+# ===========================================================
+
+# Map fg_set -> direction + set_type (Shared/RA_only/OA_only)
+var_plot <- var_all %>%
+  mutate(
+    direction = ifelse(grepl("_hyper$", fg_set), "Hyper", "Hypo"),
+    set_type  = dplyr::case_when(
+      grepl("^Shared_", fg_set) ~ "Shared",
+      grepl("^RA_only_", fg_set) ~ "RA_only",
+      grepl("^OA_only_", fg_set) ~ "OA_only",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(set_type)) %>%
+  mutate(
+    direction = factor(direction, levels = c("Hyper","Hypo")),
+    set_type  = factor(set_type, levels = c("Shared","RA_only","OA_only"))
+  )
+
+# Kruskal–Wallis per direction
+kw_tbl <- var_plot %>%
+  group_by(direction) %>%
+  kruskal_test(entropy ~ set_type) %>%
+  ungroup()
+
+p_entropy <- ggplot(var_plot, aes(x = set_type, y = entropy, fill = set_type)) +
+  geom_violin(scale = "width", trim = TRUE, alpha = 0.5) +
+  geom_boxplot(width = 0.18, outlier.size = 0.6, alpha = 0.9) +
+  facet_wrap(~ direction, ncol = 2, scales = "free_y") +
+  
+  # KW p-value inside each facet
+  ggpubr::stat_pvalue_manual(
+    kw_tbl %>% mutate(
+      group1 = "Shared", group2 = "OA_only",
+      y.position = max(var_plot$entropy, na.rm = TRUE) * 1.08,
+      label = paste0("Kruskal-Wallis p = ", signif(p, 2))
+    ),
+    label = "label",
+    xmin = "group1", xmax = "group2",
+    y.position = "y.position",
+    tip.length = 0,
+    inherit.aes = FALSE
+  ) +
+  scale_fill_viridis_d(option="D", begin = 0.2, end=0.9)+
+  
+  labs(
+    title = "ChromHMM dominant-class variability across tracks",
+    x = NULL, y = "Entropy (dominant class across tracks)"
+  ) +
+  theme_publish(base_size = 13, base_linewidth = 0.6) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+
+ggsave("chromHMM_dominant_tracks_entropy.pdf", p_entropy, width=6, height=4)
+
+# ===========================================================
+# Enrichment vs background universe
+# Use background = all candidate DMRcate regions BEFORE effect-size filter
+# ===========================================================
+
+bg_RA = ra_and_oa_vs_healthy_dmr_list$RA_vs_Healthy  # (FDR<=0.05 set)
+bg_OA = ra_and_oa_vs_healthy_dmr_list$OA_vs_Healthy
+
+hits_bg <- findOverlaps(bg_RA, bg_OA, ignore.strand=TRUE)
+
+bg_shared <- unique(c(
+  bg_RA[queryHits(hits_bg)],
+  bg_OA[subjectHits(hits_bg)]
+))
+
+# ===========================================================
+# Background assignments
+# ===========================================================
+
+assign_bg_RA     <- assign_across_tracks(bg_RA, chrom_gr_list)
+assign_bg_OA     <- assign_across_tracks(bg_OA, chrom_gr_list)
+assign_bg_shared <- assign_across_tracks(bg_shared, chrom_gr_list)
+
+# ===========================================================
+# Helper: package enrichment results (adds log2OR + stars)
+# ===========================================================
+
+add_sig_stars <- function(fdr) {
+  ifelse(fdr <= 1e-3, "***",
+         ifelse(fdr <= 1e-2, "**",
+                ifelse(fdr <= 5e-2, "*", "")))
+}
+
+prep_enr_tbl <- function(res, fg_name, bg_name) {
+  res %>%
+    mutate(
+      fg_set = fg_name,
+      bg_set = bg_name,
+      log2OR = log2(OR),
+      neglog10FDR = -log10(FDR),
+      sig = add_sig_stars(FDR)
+    )
+}
+
+# ===========================================================
+# Run enrichment (dominant collapsed ChromHMM class)
+# Prefer contrast-matched backgrounds:
+#   - RA-only and Shared vs RA background
+#   - OA-only and Shared vs OA background
+# ===========================================================
+
+#do enrichments 
+enr_ra_hyper  <- enrichment_fisher_dominant(assign_raonly_hyper, assign_bg_RA, field="dom_class") %>%
+  prep_enr_tbl("RA_only_hyper", "bg_RA")
+
+enr_ra_hypo   <- enrichment_fisher_dominant(assign_raonly_hypo,  assign_bg_RA, field="dom_class") %>%
+  prep_enr_tbl("RA_only_hypo", "bg_RA")
+
+enr_oa_hyper  <- enrichment_fisher_dominant(assign_oaonly_hyper, assign_bg_OA, field="dom_class") %>%
+  prep_enr_tbl("OA_only_hyper", "bg_OA")
+
+enr_oa_hypo   <- enrichment_fisher_dominant(assign_oaonly_hypo,  assign_bg_OA, field="dom_class") %>%
+  prep_enr_tbl("OA_only_hypo", "bg_OA")
+
+enr_shared_hyper <- enrichment_fisher_dominant(assign_shared_hyper, assign_bg_shared, field="dom_class") %>%
+  prep_enr_tbl("Shared_hyper", "bg_shared")
+
+enr_shared_hypo  <- enrichment_fisher_dominant(assign_shared_hypo,  assign_bg_shared, field="dom_class") %>%
+  prep_enr_tbl("Shared_hypo", "bg_shared")
+
+enr_class_dir_all <- bind_rows(
+  enr_shared_hyper, enr_shared_hypo,
+  enr_ra_hyper, enr_ra_hypo,
+  enr_oa_hyper, enr_oa_hypo
+)
+
+enr_class_dir_all
+
+# ===========================================================
+# Do Plotting
+# ===========================================================
+
+class_levels <- c(
+  "Promoter/TSS", "Enhancer", "Transcription",
+  "CTCF/Repressed", "Polycomb/Repressed", "Quiescent/Other"
+)
+
+fg_levels <- c("Shared_hyper","Shared_hypo","RA_only_hyper","RA_only_hypo","OA_only_hyper","OA_only_hypo")
+bg_levels <- c("bg_RA","bg_OA","bg_shared")
+
+
+enr_class_plot <- enr_class_dir_all %>%
+  mutate(
+    category = factor(category, levels = class_levels),
+    fg_set   = factor(fg_set, levels = fg_levels),
+    bg_set   = factor(bg_set, levels = bg_levels),
+    sig      = add_sig_stars(FDR),
+    # star placement
+    log2OR_raw = log2OR,
+    #if it is infinite make it finite (3.5 is the highest it can get)
+    log2OR = ifelse(is.infinite(log2OR) & log2OR < 0, -3.5, log2OR), 
+    log2OR = ifelse(is.infinite(log2OR) & log2OR > 0,  3.5, log2OR),
+    label_x  = ifelse(log2OR >= 0, log2OR + 0.12, log2OR - 0.12),
+    hjust_lab = ifelse(log2OR >= 0, 0, 1)
+  )
+
+
+p_chromhmm_enr <- ggplot(
+  enr_class_plot,
+  aes(y = category, x = log2OR, fill = log2OR)
+) +
+  geom_vline(xintercept = 0, linetype = "dashed",
+             color = "grey40", linewidth = 0.8) +
+  geom_col(width = 0.75) +
+  scale_x_continuous(expand = expansion(mult = c(0.10, 0.10))) +
+  geom_text(aes(x = label_x, label = sig, hjust = hjust_lab),
+            size = 5, color = "grey10") +
+  scale_fill_gradient2(
+    low = "#2166AC",   # depletion
+    mid = "grey95",
+    high = "#B2182B",  # enrichment
+    midpoint = 0,
+    name = expression(log[2]~OR)
+  ) +
+  facet_wrap(~ fg_set, ncol = 2) +
+  labs(
+    title = "Enrichment of dominant ChromHMM classes (vs DMRcate background)",
+    x = "log2(Odds ratio) (0 = no enrichment)",
+    y = NULL
+  ) +
+  theme_publish(base_size = 14, base_linewidth = 0.7) +
+  theme(
+    legend.position = "right",
+    strip.text = element_text(face = "bold")
+  )
+
+p_chromhmm_enr
+ggsave("dmrs_chromhmm_class_enrichment.pdf", p_chromhmm_enr, width = 9, height = 6)
+
+
+```
+
+#####DMR annotation for Upper-Lower Joint DMRs (add-on chunk)
+uses the functions described above, performs the same workflow but for UL joint DMRs
+```{r}
+# ===========================================================
+# UL (RA+OA) DMRs: ChromHMM dominant-class enrichment
+# bg_UL is the UL DMRcate universe BEFORE effect-size filtering
+# ===========================================================
+
+# -----------------------------
+# 1) Load background universe (pre-filter UL candidate regions; hg38)
+# -----------------------------
+ul_bg_list <- readRDS("outputs - after xy removal - open regions/RA_OA_upper_vs_lower_DMRs_filteredChromHMM.rds")
+bg_UL <- ul_bg_list$Upper_vs_Lower_hg38
+
+# -----------------------------
+# 2) Make the foreground (effect-size filtered UL DMRs)
+# -----------------------------
+#filter the dmrs according to the abs betavalue diff >= 0.1 
+filter_dmrs <- function(gr, abs_meandiff=0.1) {
+  gr[
+    abs(mcols(gr)$meandiff) >= abs_meandiff
+  ]
+}
+fg_UL <- filter_dmrs(bg_UL)
+
+# ===========================================================
+# UL (RA+OA) DMRs: dominant ChromHMM-class enrichment
+# - NO Healthy_knee track used
+# - dominant class = majority across RA+OA tracks only
+# ===========================================================
+
+# 1) Build ChromHMM GRanges list WITHOUT Healthy_knee
+chrom_gr_list_UL <- list(
+  RA_knee     = build_chromhmm_gr(ra_knee_chromhmm_df,     chromhmm_state_map, "RA_knee"),
+  RA_hand     = build_chromhmm_gr(ra_hand_chromhmm_df,     chromhmm_state_map, "RA_hand"),
+  RA_shoulder = build_chromhmm_gr(ra_shoulder_chromhmm_df, chromhmm_state_map, "RA_shoulder"),
+  OA_knee     = build_chromhmm_gr(oa_knee_chromhmm_df,     chromhmm_state_map, "OA_knee"),
+  OA_thumb    = build_chromhmm_gr(oa_thumb_chromhmm_df,    chromhmm_state_map, "OA_thumb"),
+  OA_shoulder = build_chromhmm_gr(oa_shoulder_chromhmm_df, chromhmm_state_map, "OA_shoulder")
+)
+
+# 2) Assign dominant state per DMR per track (disease tracks only)
+assign_UL_fg <- assign_across_tracks(fg_UL, chrom_gr_list_UL)
+assign_UL_bg <- assign_across_tracks(bg_UL, chrom_gr_list_UL)
+
+# 3) Fisher enrichment on majority dominant class across tracks (fg vs bg)
+enr_UL <- enrichment_fisher_dominant(assign_UL_fg, assign_UL_bg, field = "dom_class") %>%
+  prep_enr_tbl("Upper_vs_Lower", "bg_UL")
+
+# 4) Plot (same style as Fig 2b)
+class_levels <- c("Promoter/TSS","Enhancer","Transcription","CTCF/Repressed","Polycomb/Repressed","Quiescent/Other")
+
+enr_UL_plot <- enr_UL %>%
+  mutate(
+    category = factor(category, levels = class_levels),
+    fg_set   = factor(fg_set, levels = "Upper_vs_Lower"),
+    bg_set   = factor(bg_set, levels = "bg_UL"),
+    sig      = add_sig_stars(FDR),
+    log2OR_raw = log2OR,
+    log2OR = ifelse(is.infinite(log2OR) & log2OR < 0, -3.5, log2OR),
+    log2OR = ifelse(is.infinite(log2OR) & log2OR > 0,  3.5, log2OR),
+    label_x  = ifelse(log2OR >= 0, log2OR + 0.12, log2OR - 0.12),
+    hjust_lab = ifelse(log2OR >= 0, 0, 1)
+  )
+
+p_UL_chromhmm_enr <- ggplot(
+  enr_UL_plot,
+  aes(y = category, x = log2OR, fill = log2OR)
+) +
+  geom_vline(xintercept = 0, linetype = "dashed",
+             color = "grey40", linewidth = 0.8) +
+  geom_col(width = 0.75) +
+  scale_x_continuous(expand = expansion(mult = c(0.10, 0.10))) +
+  geom_text(aes(x = label_x, label = sig, hjust = hjust_lab),
+            size = 5, color = "grey10") +
+  scale_fill_gradient2(
+    low = "#2166AC",
+    mid = "grey95",
+    high = "#B2182B",
+    midpoint = 0,
+    name = expression(log[2]~OR)
+  ) +
+  labs(
+    title = "Upper vs Lower Extremity DMRs\nDominant ChromHMM class enrichment",
+    x = "log2(Odds ratio) (0 = no enrichment)",
+    y = NULL
+  ) +
+  theme_publish(base_size = 14, base_linewidth = 0.7) +
+  theme(
+    legend.position = "right",
+    strip.text = element_text(face = "bold")
+  )
+
+p_UL_chromhmm_enr
+ggsave("UL_dmrs_chromhmm_class_enrichment_RA_OA_tracks_only.pdf",
+       p_UL_chromhmm_enr, width = 6.7, height = 4.5)
+
+# ===========================================================
+# UL: Visualize Dominant Class Distribution Across Tracks
+# ===========================================================
+
+# use your existing class/track order
+class_levels <- c("Promoter/TSS","Enhancer","Transcription",
+                  "CTCF/Repressed","Polycomb/Repressed","Quiescent/Other")
+track_levels <- c("Healthy_knee","RA_knee","RA_shoulder","RA_hand",
+                  "OA_knee","OA_shoulder","OA_thumb")
+
+dist_UL_tbl <- assign_UL_fg %>%
+  dplyr::filter(!is.na(dom_class)) %>%
+  dplyr::mutate(
+    dom_class = factor(dom_class, levels = class_levels),
+    track     = factor(track, levels = track_levels)
+  ) %>%
+  dplyr::count(track, dom_class, name = "n") %>%
+  dplyr::group_by(track) %>%
+  dplyr::mutate(frac = n / sum(n)) %>%
+  dplyr::ungroup()
+
+p_UL_domclass_bytrack <- ggplot(dist_UL_tbl, aes(x = track, y = frac, fill = dom_class)) +
+  geom_col(width = 0.85) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_fill_viridis_d(option = "plasma", end = 0.9, name = "Dominant class", direction = 1) +
+  labs(
+    title = "Upper vs lower extremity DMRs\nDominant ChromHMM class per track",
+    x = NULL, y = "Fraction of UL DMRs"
+  ) +
+  theme_publish(base_size = 13, base_linewidth = 0.6) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right"
+  )
+
+p_UL_domclass_bytrack
+ggsave("UL_dmrs_domclass_bytrack.pdf", p_UL_domclass_bytrack, width = 7, height = 4.5)
+
+
+```
+
+###ChromHMM "class-switch"
+
+```{r}
+
+### ChromHMM "class-switch": consensus vs knee-only
+
+# ----------------------------
+# helpers
+# ----------------------------
+mode1 <- function(x) {
+  x <- x[!is.na(x)]
+  if (length(x) == 0) return(NA_character_)
+  names(sort(table(x), decreasing = TRUE))[1]
+}
+
+# Consistent class order + colors (same as your other figures)
+class_levels <- c(
+  "Promoter/TSS","Enhancer","Transcription",
+  "CTCF/Repressed","Polycomb/Repressed","Quiescent/Other"
+)
+
+class_cols <- viridis(length(class_levels), option = "plasma", end = 0.9, direction = 1)
+names(class_cols) <- class_levels
+
+
+# ----------------------------
+# 1) Build wide switch table + consensus and knee-only calls
+# ----------------------------
+build_switch_table2 <- function(assign_df,
+                                healthy_track = "Healthy_knee",
+                                ra_tracks = c("RA_knee","RA_hand","RA_shoulder"),
+                                oa_tracks = c("OA_knee","OA_thumb","OA_shoulder"),
+                                ra_knee_track = "RA_knee",
+                                oa_knee_track = "OA_knee",
+                                min_cover = 0) {
+  
+  wide <- assign_df %>%
+    mutate(
+      track = str_trim(as.character(track)),
+      dom_class = as.character(dom_class)
+    ) %>%
+    filter(is.na(frac_covered) | frac_covered >= min_cover) %>%
+    select(dmr_id, track, dom_class) %>%
+    distinct() %>%
+    pivot_wider(names_from = track, values_from = dom_class)
+  
+  # Ensure required columns exist even if missing in pivot_wider
+  need_cols <- unique(c(healthy_track, ra_tracks, oa_tracks, ra_knee_track, oa_knee_track))
+  missing_cols <- setdiff(need_cols, colnames(wide))
+  if (length(missing_cols) > 0) for (cc in missing_cols) wide[[cc]] <- NA_character_
+  
+  out <- wide %>%
+    mutate(
+      Healthy = !!sym(healthy_track),
+      
+      # consensus across tracks
+      RA_consensus = apply(select(., all_of(ra_tracks)), 1, mode1),
+      OA_consensus = apply(select(., all_of(oa_tracks)), 1, mode1),
+      
+      # knee-only calls
+      RA_knee_only = !!sym(ra_knee_track),
+      OA_knee_only = !!sym(oa_knee_track)
+    ) %>%
+    mutate(
+      # basic flags you already used (consensus-based)
+      RA_diff_from_OA = !is.na(RA_consensus) & !is.na(OA_consensus) & RA_consensus != OA_consensus,
+      RA_diff_from_Healthy = !is.na(Healthy) & !is.na(RA_consensus) & Healthy != RA_consensus,
+      OA_diff_from_Healthy = !is.na(Healthy) & !is.na(OA_consensus) & Healthy != OA_consensus
+    )
+  
+  out
+}
+
+# ----------------------------
+# 2) Summarize switches (counts + switched fraction)
+# ----------------------------
+summarize_switches <- function(sw_df,
+                               from_col = "Healthy",
+                               to_col   = "RA_consensus",
+                               class_levels_in = class_levels) {
+  
+  stopifnot(from_col %in% colnames(sw_df), to_col %in% colnames(sw_df))
+  
+  counts <- sw_df %>%
+    filter(!is.na(.data[[from_col]]), !is.na(.data[[to_col]])) %>%
+    count(.data[[from_col]], .data[[to_col]], name = "n") %>%
+    rename(From = 1, To = 2) %>%
+    mutate(
+      From = factor(From, levels = class_levels_in),
+      To   = factor(To,   levels = class_levels_in)
+    ) %>%
+    arrange(desc(n))
+  
+  total_n <- sum(counts$n)
+  stable_n <- counts %>%
+    filter(From == To) %>%
+    summarise(n = sum(n), .groups="drop") %>%
+    pull(n)
+  
+  if (length(stable_n) == 0 || is.na(stable_n)) stable_n <- 0L
+  switched_n <- total_n - stable_n
+  
+  list(
+    counts = counts,
+    total_n = total_n,
+    stable_n = stable_n,
+    switched_n = switched_n,
+    stable_frac = ifelse(total_n > 0, stable_n / total_n, NA_real_),
+    switched_frac = ifelse(total_n > 0, switched_n / total_n, NA_real_)
+  )
+}
+
+# ----------------------------
+# 3) Plot alluvial (topN changed switches)
+# ----------------------------
+plot_switch_alluvial <- function(counts_df,
+                                 title,
+                                 subtitle_stats = NULL,
+                                 topN = 5,
+                                 changed_only = TRUE,
+                                 class_cols_in = class_cols) {
+  
+  df <- counts_df
+  if (changed_only) df <- df %>% filter(From != To)
+  
+  df_top <- df %>%
+    arrange(desc(n)) %>%
+    slice_head(n = topN)
+  
+  ggplot(df_top, aes(axis1 = From, axis2 = To, y = n)) +
+    ggalluvial::geom_alluvium(aes(fill = To), alpha = 0.9, width = 1/12) +
+    ggalluvial::geom_stratum(width = 1/10, color = "grey30") +
+    geom_text(stat = "stratum", aes(label = after_stat(stratum)), size = 3.4) +
+    scale_x_discrete(limits = c("Healthy_knee", "Disease"), expand = c(.05, .05)) +
+    scale_fill_manual(values = class_cols_in, drop = FALSE, name = "Dominant class") +
+    labs(
+      x = NULL, y = "Number of DMRs",
+      title = title,
+      subtitle = subtitle_stats
+    ) +
+    theme_publish(base_size = 13, base_linewidth = 0.6) +
+    theme(legend.position = "right")
+}
+
+# ----------------------------
+# 4) Wrapper: build both consensus + knee-only switch results for a set
+# ----------------------------
+run_switch_pair <- function(sw_df, disease = c("RA","OA"), topN = 5, changed_only = TRUE) {
+  disease <- match.arg(disease)
+  
+  if (disease == "RA") {
+    # consensus
+    s_cons <- summarize_switches(sw_df, from_col="Healthy", to_col="RA_consensus")
+    sub_cons <- sprintf(
+      "Consensus. Switched: %d/%d (%.1f%%); Stable: %d/%d (%.1f%%).",
+      s_cons$switched_n, s_cons$total_n, 100*s_cons$switched_frac,
+      s_cons$stable_n, s_cons$total_n, 100*s_cons$stable_frac
+    )
+    
+    p_cons <- plot_switch_alluvial(
+      s_cons$counts,
+      title = "Healthy → RA consensus",
+      subtitle_stats = sub_cons,
+      topN = topN,
+      changed_only = changed_only
+    )
+    
+    # knee-only
+    s_knee <- summarize_switches(sw_df, from_col="Healthy", to_col="RA_knee_only")
+    sub_knee <- sprintf(
+      "Knee-only. Switched: %d/%d (%.1f%%); Stable: %d/%d (%.1f%%).",
+      s_knee$switched_n, s_knee$total_n, 100*s_knee$switched_frac,
+      s_knee$stable_n, s_knee$total_n, 100*s_knee$stable_frac
+    )
+    
+    p_knee <- plot_switch_alluvial(
+      s_knee$counts,
+      title = "Healthy → RA knee",
+      subtitle_stats = sub_knee,
+      topN = topN,
+      changed_only = changed_only
+    )
+    
+  } else {
+    # consensus
+    s_cons <- summarize_switches(sw_df, from_col="Healthy", to_col="OA_consensus")
+    sub_cons <- sprintf(
+      "Consensus. Switched: %d/%d (%.1f%%); Stable: %d/%d (%.1f%%).",
+      s_cons$switched_n, s_cons$total_n, 100*s_cons$switched_frac,
+      s_cons$stable_n, s_cons$total_n, 100*s_cons$stable_frac
+    )
+    
+    p_cons <- plot_switch_alluvial(
+      s_cons$counts,
+      title = "Healthy → OA consensus",
+      subtitle_stats = sub_cons,
+      topN = topN,
+      changed_only = changed_only
+    )
+    
+    # knee-only
+    s_knee <- summarize_switches(sw_df, from_col="Healthy", to_col="OA_knee_only")
+    sub_knee <- sprintf(
+      "Knee-only. Switched: %d/%d (%.1f%%); Stable: %d/%d (%.1f%%).",
+      s_knee$switched_n, s_knee$total_n, 100*s_knee$switched_frac,
+      s_knee$stable_n, s_knee$total_n, 100*s_knee$stable_frac
+    )
+    
+    p_knee <- plot_switch_alluvial(
+      s_knee$counts,
+      title = "Healthy → OA knee",
+      subtitle_stats = sub_knee,
+      topN = topN,
+      changed_only = changed_only
+    )
+  }
+  
+  list(
+    consensus = list(summary = s_cons, plot = p_cons),
+    knee      = list(summary = s_knee, plot = p_knee)
+  )
+}
+
+# ----------------------------
+# 5) Build switch tables for each DMR set
+# ----------------------------
+sw_list <- list(
+  Shared_hyper  = build_switch_table2(assign_shared_hyper),
+  Shared_hypo   = build_switch_table2(assign_shared_hypo),
+  RA_only_hyper = build_switch_table2(assign_raonly_hyper),
+  RA_only_hypo  = build_switch_table2(assign_raonly_hypo),
+  OA_only_hyper = build_switch_table2(assign_oaonly_hyper),
+  OA_only_hypo  = build_switch_table2(assign_oaonly_hypo)
+)
+
+topN <- 5
+changed_only <- TRUE
+
+plot_list <- list()
+summary_tbl <- list()
+
+for (nm in names(sw_list)) {
+  
+  sw <- sw_list[[nm]]
+  
+  if (grepl("^RA_only", nm)) {
+    rr <- run_switch_pair(sw, disease="RA", topN=topN, changed_only=changed_only)
+    
+    plot_list[[paste0(nm, "_consensus")]] <- rr$consensus$plot
+    plot_list[[paste0(nm, "_knee")]]      <- rr$knee$plot
+    
+    summary_tbl[[nm]] <- tibble(
+      set = nm,
+      disease = "RA",
+      switched_consensus = rr$consensus$summary$switched_n,
+      total_consensus    = rr$consensus$summary$total_n,
+      switched_frac_consensus = rr$consensus$summary$switched_frac,
+      switched_knee = rr$knee$summary$switched_n,
+      total_knee    = rr$knee$summary$total_n,
+      switched_frac_knee = rr$knee$summary$switched_frac
+    )
+    
+  } else if (grepl("^OA_only", nm)) {
+    rr <- run_switch_pair(sw, disease="OA", topN=topN, changed_only=changed_only)
+    
+    plot_list[[paste0(nm, "_consensus")]] <- rr$consensus$plot
+    plot_list[[paste0(nm, "_knee")]]      <- rr$knee$plot
+    
+    summary_tbl[[nm]] <- tibble(
+      set = nm,
+      disease = "OA",
+      switched_consensus = rr$consensus$summary$switched_n,
+      total_consensus    = rr$consensus$summary$total_n,
+      switched_frac_consensus = rr$consensus$summary$switched_frac,
+      switched_knee = rr$knee$summary$switched_n,
+      total_knee    = rr$knee$summary$total_n,
+      switched_frac_knee = rr$knee$summary$switched_frac
+    )
+    
+  } else if (grepl("^Shared", nm)) {
+    # For shared sets, do BOTH RA and OA comparisons (each with consensus + knee-only)
+    rr_ra <- run_switch_pair(sw, disease="RA", topN=topN, changed_only=changed_only)
+    rr_oa <- run_switch_pair(sw, disease="OA", topN=topN, changed_only=changed_only)
+    
+    plot_list[[paste0(nm, "_RA_consensus")]] <- rr_ra$consensus$plot
+    plot_list[[paste0(nm, "_RA_knee")]]      <- rr_ra$knee$plot
+    plot_list[[paste0(nm, "_OA_consensus")]] <- rr_oa$consensus$plot
+    plot_list[[paste0(nm, "_OA_knee")]]      <- rr_oa$knee$plot
+    
+    summary_tbl[[paste0(nm, "_RA")]] <- tibble(
+      set = paste0(nm, "_RA"),
+      disease = "RA",
+      switched_consensus = rr_ra$consensus$summary$switched_n,
+      total_consensus    = rr_ra$consensus$summary$total_n,
+      switched_frac_consensus = rr_ra$consensus$summary$switched_frac,
+      switched_knee = rr_ra$knee$summary$switched_n,
+      total_knee    = rr_ra$knee$summary$total_n,
+      switched_frac_knee = rr_ra$knee$summary$switched_frac
+    )
+    
+    summary_tbl[[paste0(nm, "_OA")]] <- tibble(
+      set = paste0(nm, "_OA"),
+      disease = "OA",
+      switched_consensus = rr_oa$consensus$summary$switched_n,
+      total_consensus    = rr_oa$consensus$summary$total_n,
+      switched_frac_consensus = rr_oa$consensus$summary$switched_frac,
+      switched_knee = rr_oa$knee$summary$switched_n,
+      total_knee    = rr_oa$knee$summary$total_n,
+      switched_frac_knee = rr_oa$consensus$summary$switched_frac  # <-- careful (see below)
+    )
+    
+    # NOTE:
+    # if you want OA_knee_only specifically, keep rr_oa$knee (I wrote it above properly).
+    # I’m leaving this comment because you may accidentally re-use consensus here.
+    summary_tbl[[paste0(nm, "_OA")]]$switched_frac_knee <- rr_oa$knee$summary$switched_frac
+    summary_tbl[[paste0(nm, "_OA")]]$switched_knee      <- rr_oa$knee$summary$switched_n
+    summary_tbl[[paste0(nm, "_OA")]]$total_knee         <- rr_oa$knee$summary$total_n
+  }
+}
+
+# ----------------------------
+# 5b) Build switch tables for background universes (from the previous code chunk)
+# ----------------------------
+sw_bg <- list(
+  bg_RA     = build_switch_table2(assign_bg_RA),
+  bg_OA     = build_switch_table2(assign_bg_OA),
+  bg_shared = build_switch_table2(assign_bg_shared)
+)
+
+# ----------------------------
+# 5c) Fisher enrichment: switched vs stable (foreground vs background)
+# ----------------------------
+fisher_switch_enrichment <- function(sw_fg, sw_bg, to_col = "RA_consensus") {
+  # keep only rows with both Healthy and the disease call
+  fg <- sw_fg %>% filter(!is.na(Healthy), !is.na(.data[[to_col]]))
+  bg <- sw_bg %>% filter(!is.na(Healthy), !is.na(.data[[to_col]]))
+
+  fg_sw <- sum(fg$Healthy != fg[[to_col]])
+  fg_st <- nrow(fg) - fg_sw
+
+  bg_sw <- sum(bg$Healthy != bg[[to_col]])
+  bg_st <- nrow(bg) - bg_sw
+
+  ft <- fisher.test(matrix(c(fg_sw, fg_st, bg_sw, bg_st), nrow = 2, byrow = TRUE))
+
+  tibble(
+    fg_n = nrow(fg),
+    fg_switched = fg_sw,
+    fg_frac = fg_sw / nrow(fg),
+    bg_n = nrow(bg),
+    bg_switched = bg_sw,
+    bg_frac = bg_sw / nrow(bg),
+    OR = unname(ft$estimate),
+    p = ft$p.value
+  )
+}
+
+# ----------------------------
+# 5d) Run Fisher switch-enrichment (consensus-based)
+# ----------------------------
+enr_switch_tbl <- bind_rows(
+  # RA-only sets vs RA background (use RA_consensus)
+  fisher_switch_enrichment(sw_list$RA_only_hyper, sw_bg$bg_RA, to_col = "RA_consensus") %>%
+    mutate(set = "RA_only_hyper", disease = "RA", bg = "bg_RA"),
+  fisher_switch_enrichment(sw_list$RA_only_hypo,  sw_bg$bg_RA, to_col = "RA_consensus") %>%
+    mutate(set = "RA_only_hypo",  disease = "RA", bg = "bg_RA"),
+
+  # OA-only sets vs OA background (use OA_consensus)
+  fisher_switch_enrichment(sw_list$OA_only_hyper, sw_bg$bg_OA, to_col = "OA_consensus") %>%
+    mutate(set = "OA_only_hyper", disease = "OA", bg = "bg_OA"),
+  fisher_switch_enrichment(sw_list$OA_only_hypo,  sw_bg$bg_OA, to_col = "OA_consensus") %>%
+    mutate(set = "OA_only_hypo",  disease = "OA", bg = "bg_OA"),
+
+  # Shared sets: you can test vs shared background using RA_consensus or OA_consensus
+  fisher_switch_enrichment(sw_list$Shared_hyper,  sw_bg$bg_shared, to_col = "RA_consensus") %>%
+    mutate(set = "Shared_hyper",  disease = "RA", bg = "bg_shared"),
+  fisher_switch_enrichment(sw_list$Shared_hypo,   sw_bg$bg_shared, to_col = "RA_consensus") %>%
+    mutate(set = "Shared_hypo",   disease = "RA", bg = "bg_shared"),
+
+  fisher_switch_enrichment(sw_list$Shared_hyper,  sw_bg$bg_shared, to_col = "OA_consensus") %>%
+    mutate(set = "Shared_hyper",  disease = "OA", bg = "bg_shared"),
+  fisher_switch_enrichment(sw_list$Shared_hypo,   sw_bg$bg_shared, to_col = "OA_consensus") %>%
+    mutate(set = "Shared_hypo",   disease = "OA", bg = "bg_shared")
+) %>%
+  mutate(
+    FDR = p.adjust(p, "BH"),
+    log2OR = log2(OR)
+  ) %>%
+  arrange(FDR)
+
+enr_switch_tbl
+
+# ----------------------------
+# 6) View plots (paired consensus vs knee-only)
+# ----------------------------
+wrap_plots(plot_list, ncol = 4)
+
+# ----------------------------
+# 7) Compare switched fractions (consensus vs knee-only)
+# ----------------------------
+switch_compare_tbl <- bind_rows(summary_tbl) %>%
+  mutate(
+    delta = switched_frac_consensus - switched_frac_knee,
+    switched_consensus_str = sprintf("%d/%d (%.1f%%)", switched_consensus, total_consensus, 100*switched_frac_consensus),
+    switched_knee_str      = sprintf("%d/%d (%.1f%%)", switched_knee, total_knee, 100*switched_frac_knee),
+    delta_pct = 100*delta
+  ) %>%
+  select(set, disease, switched_consensus_str, switched_knee_str, delta_pct) %>%
+  arrange(desc(abs(delta_pct)))
+
+switch_compare_tbl
+write_csv(switch_compare_tbl, "supplementary_table_3.csv")
+
+# ----------------------------
+# 8) Show only selected alluvial heatmaps
+# ----------------------------
+
+plot_switch_topN <- function(sw_df,
+                             to_col = "RA_consensus",
+                             title = "",
+                             topN = 5,
+                             changed_only = TRUE,
+                             class_levels,
+                             class_cols,
+                             extra_subtitle = NULL) {
+
+  counts <- sw_df %>%
+    filter(!is.na(Healthy), !is.na(.data[[to_col]])) %>%
+    count(From = Healthy, To = .data[[to_col]], name = "n") %>%
+    mutate(
+      From = factor(From, levels = class_levels),
+      To   = factor(To,   levels = class_levels)
+    ) %>%
+    arrange(desc(n))
+
+  total_n <- sum(counts$n)
+  stable_n <- counts %>% filter(From == To) %>% summarise(n = sum(n)) %>% pull(n)
+  stable_n <- ifelse(length(stable_n)==0 || is.na(stable_n), 0L, stable_n)
+  switched_n <- total_n - stable_n
+
+  df_plot <- counts
+  if (changed_only) df_plot <- df_plot %>% filter(From != To)
+  df_plot <- df_plot %>% slice_head(n = topN)
+  
+  base_sub <- paste0(
+    "Top ", topN, " switches shown. Switched: ",
+    switched_n, "/", total_n, " (", round(100*switched_n/total_n,1),
+    "%); Stable: ", stable_n, "/", total_n, " (", round(100*stable_n/total_n,1), "%)."
+  )
+
+  sub <- if (!is.null(extra_subtitle)) paste0(base_sub, "\n", extra_subtitle) else base_sub
+
+  p <- ggplot(df_plot, aes(axis1 = From, axis2 = To, y = n)) +
+    ggalluvial::geom_alluvium(aes(fill = To), alpha = 0.9, width = 1/12) +
+    ggalluvial::geom_stratum(width = 1/10, color = "grey30") +
+      geom_label(
+    stat = "stratum",
+    aes(label = after_stat(stratum)),
+    fill = "grey95",
+    color ="black",
+    label.size = 0.2
+    )+
+    scale_x_discrete(limits = c("NIC (healthy knee)", "RA consensus"), expand = c(.12, .12)) +
+    scale_fill_manual(values = class_cols, name = "Dominant class") +
+    labs(x = NULL, y = "Number of DMRs", title = title, subtitle = sub) +
+    theme_publish(base_size = 13, base_linewidth = 0.6) +
+    theme(legend.position = "none") 
+    
+
+  list(plot = p, counts = counts, total_n = total_n, stable_n = stable_n, switched_n = switched_n)
+}
+
+# Colors consistent with other plots
+class_levels <- c("Promoter/TSS","Enhancer","Transcription","CTCF/Repressed","Polycomb/Repressed","Quiescent/Other")
+class_cols <- viridis::viridis(length(class_levels), option = "plasma", end = 0.9, direction = 1)
+names(class_cols) <- class_levels
+
+#helper for subtitles
+mk_extra <- function(set, disease) {
+  r <- enr_switch_tbl %>% filter(set == !!set, disease == !!disease) %>% slice(1)
+  sprintf("Switch enrichment: OR=%.2f, FDR=%.2g (%.1f%% vs %.1f%%)",
+          r$OR, r$FDR, 100*r$fg_frac, 100*r$bg_frac)
+}
+# Build the four panels
+
+p_ra_only_hyper <- plot_switch_topN(sw_list$RA_only_hyper, "RA_consensus",
+  title = "RA-only hyper: NIC -> RA consensus", topN = 5, changed_only = TRUE,
+  class_levels = class_levels, class_cols = class_cols,
+  extra_subtitle = mk_extra("RA_only_hyper","RA")
+)$plot
+
+p_ra_only_hypo <- plot_switch_topN(sw_list$RA_only_hypo, "RA_consensus",
+  title = "RA-only hypo: NIC -> RA consensus", topN = 5, changed_only = TRUE,
+  class_levels = class_levels, class_cols = class_cols,
+  extra_subtitle = mk_extra("RA_only_hypo","RA")
+)$plot
+
+p_shared_hyper_ra <- plot_switch_topN(sw_list$Shared_hyper, "RA_consensus",
+  title = "Shared hyper: NIC -> RA consensus", topN = 5, changed_only = TRUE,
+  class_levels = class_levels, class_cols = class_cols,
+  extra_subtitle = mk_extra("Shared_hyper","RA")
+)$plot
+
+p_shared_hypo_ra <- plot_switch_topN(sw_list$Shared_hypo, "RA_consensus",
+  title = "Shared hypo: NIC -> RA consensus", topN = 5, changed_only = TRUE,
+  class_levels = class_levels, class_cols = class_cols,
+  extra_subtitle = mk_extra("Shared_hypo","RA")
+)$plot
+
+p_fig2c <- patchwork::wrap_plots(
+  p_shared_hyper_ra, p_shared_hypo_ra, p_ra_only_hyper, p_ra_only_hypo,
+  ncol = 2
+)
+
+p_fig2c
+
+ggsave(filename = "alluvial_heatmaps.pdf",
+         plot = p_fig2c, width = 11.2, height = 7)
+
+# ----------------------------
+# 9) Show the 5 categories of switch-types in each group
+# ----------------------------
+
+# ----------------------------
+# Pattern table 
+# ----------------------------
+pattern5_tbl <- function(sw_df, set_name, direction) {
+  sw_df %>%
+    filter(!is.na(Healthy), !is.na(RA_consensus), !is.na(OA_consensus)) %>%
+    mutate(
+      RA_switched = Healthy != RA_consensus,
+      OA_switched = Healthy != OA_consensus,
+      both_switched = RA_switched & OA_switched,
+      same_dest = both_switched & (RA_consensus == OA_consensus),
+      pattern = case_when(
+        !RA_switched & !OA_switched ~ "Stable in both",
+        RA_switched & !OA_switched  ~ "RA-only switch",
+        !RA_switched & OA_switched  ~ "OA-only switch",
+        both_switched & same_dest   ~ "Both switch (same dest)",
+        both_switched & !same_dest  ~ "Both switch (different dest)"
+      )
+    ) %>%
+    count(pattern, name = "n") %>%
+    mutate(
+      frac = n / sum(n),
+      set = set_name,
+      direction = direction
+    )
+}
+
+pat_levels <- c(
+  "Stable in both",
+  "RA-only switch",
+  "OA-only switch",
+  "Both switch (same dest)",
+  "Both switch (different dest)"
+)
+
+# ----------------------------
+# Fisher enrichment against SHARED
+# ----------------------------
+pattern_calls <- function(sw_df) {
+  sw_df %>%
+    filter(!is.na(Healthy), !is.na(RA_consensus), !is.na(OA_consensus)) %>%
+    transmute(
+      RA_switched = Healthy != RA_consensus,
+      OA_switched = Healthy != OA_consensus,
+      both_switched = RA_switched & OA_switched,
+      same_dest = both_switched & (RA_consensus == OA_consensus),
+      pattern = case_when(
+        !RA_switched & !OA_switched ~ "Stable in both",
+        RA_switched & !OA_switched  ~ "RA-only switch",
+        !RA_switched & OA_switched  ~ "OA-only switch",
+        both_switched & same_dest   ~ "Both switch (same dest)",
+        both_switched & !same_dest  ~ "Both switch (different dest)"
+      )
+    )
+}
+
+fisher_pattern_vs_shared <- function(fg_sw, bg_sw, pattern_of_interest,
+                                     fg_name, direction, disease_tag) {
+  fg <- pattern_calls(fg_sw)
+  bg <- pattern_calls(bg_sw)
+
+  fg_in <- sum(fg$pattern == pattern_of_interest)
+  fg_out <- nrow(fg) - fg_in
+  bg_in <- sum(bg$pattern == pattern_of_interest)
+  bg_out <- nrow(bg) - bg_in
+
+  ft <- fisher.test(matrix(c(fg_in, fg_out, bg_in, bg_out), nrow = 2, byrow = TRUE))
+
+  tibble::tibble(
+    set = fg_name,
+    direction = direction,
+    disease = disease_tag,
+    pattern = pattern_of_interest,
+    fg_n = nrow(fg),
+    fg_in = fg_in,
+    fg_frac = fg_in / nrow(fg),
+    bg_n = nrow(bg),
+    bg_in = bg_in,
+    bg_frac = bg_in / nrow(bg),
+    OR = unname(ft$estimate),
+    p = ft$p.value
+  )
+}
+
+#   RA-only vs Shared on "RA-only switch"
+#   OA-only vs Shared on "OA-only switch"
+enr_pat_tbl <- bind_rows(
+  fisher_pattern_vs_shared(sw_list$RA_only_hyper, sw_list$Shared_hyper,
+                           pattern_of_interest = "RA-only switch",
+                           fg_name = "RA_only_hyper", direction = "Hyper", disease_tag = "RA"),
+  fisher_pattern_vs_shared(sw_list$RA_only_hypo,  sw_list$Shared_hypo,
+                           pattern_of_interest = "RA-only switch",
+                           fg_name = "RA_only_hypo",  direction = "Hypo",  disease_tag = "RA"),
+  fisher_pattern_vs_shared(sw_list$OA_only_hyper, sw_list$Shared_hyper,
+                           pattern_of_interest = "OA-only switch",
+                           fg_name = "OA_only_hyper", direction = "Hyper", disease_tag = "OA"),
+  fisher_pattern_vs_shared(sw_list$OA_only_hypo,  sw_list$Shared_hypo,
+                           pattern_of_interest = "OA-only switch",
+                           fg_name = "OA_only_hypo",  direction = "Hypo",  disease_tag = "OA")
+) %>%
+  mutate(FDR = p.adjust(p, "BH"),
+         log2OR = log2(OR))
+
+# ----------------------------
+# Subtitle builder uses enr_pat_tbl
+# ----------------------------
+make_enr_subtitle2 <- function(enr_tbl, hyper_set, hypo_set, disease_tag) {
+  eH <- enr_tbl %>% filter(set == hyper_set, disease == disease_tag)
+  eL <- enr_tbl %>% filter(set == hypo_set,  disease == disease_tag)
+
+  fmt <- function(df, lab) {
+    if (nrow(df) == 0) return(paste0(lab, ": NA"))
+    sprintf("%s vs Shared: OR=%.2f, FDR=%.2g", lab, df$OR[1], df$FDR[1])
+  }
+
+  paste0(fmt(eH, "Hyper"), "\n", fmt(eL, "Hypo"))
+}
+
+# ============================================================
+# A) Shared
+# ============================================================
+shared_pat_tbl <- bind_rows(
+  pattern5_tbl(sw_list$Shared_hyper, "Shared", "Hyper"),
+  pattern5_tbl(sw_list$Shared_hypo,  "Shared", "Hypo")
+) %>%
+  mutate(
+    pattern   = factor(pattern, levels = pat_levels),
+    direction = factor(direction, levels = c("Hyper", "Hypo"))
+  )
+
+pA_shared <- ggplot(shared_pat_tbl, aes(x = direction, y = frac, fill = pattern)) +
+  geom_col(width = 0.72) +
+  geom_text(
+    aes(label = paste0(round(100 * frac), "%")),
+    position = position_stack(vjust = 0.5),
+    size = 4, color = "white"
+  ) +
+  scale_y_continuous(labels = percent_format(accuracy = 1), limits = c(0, 1)) +
+  scale_fill_viridis_d(option = "mako", begin = 0.15, end = 0.8, direction = -1, name = NULL) +
+  labs(
+    title = "Shared DMRs",
+    subtitle = "Chromatin-switch patterns\nrelative to NIC",
+    x = NULL, y = "Fraction of DMRs"
+  ) +
+  theme_publish(base_size = 13, base_linewidth = 0.6) +
+  theme(legend.position = "none")
+
+# ============================================================
+# B) RA-only (same style as A) + enrichment subtitle
+# ============================================================
+ra_pat_tbl <- bind_rows(
+  pattern5_tbl(sw_list$RA_only_hyper, "RA-only", "Hyper"),
+  pattern5_tbl(sw_list$RA_only_hypo,  "RA-only", "Hypo")
+) %>%
+  mutate(
+    pattern   = factor(pattern, levels = pat_levels),
+    direction = factor(direction, levels = c("Hyper", "Hypo"))
+  )
+
+sub_B <- make_enr_subtitle2(enr_pat_tbl,
+                            hyper_set = "RA_only_hyper",
+                            hypo_set  = "RA_only_hypo",
+                            disease_tag = "RA")
+
+pB_ra <- ggplot(ra_pat_tbl, aes(x = direction, y = frac, fill = pattern)) +
+  geom_col(width = 0.72) +
+  geom_text(aes(label = paste0(round(100 * frac), "%")),
+            position = position_stack(vjust = 0.5),
+            size = 4, color = "white") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  scale_fill_viridis_d(option = "mako", begin = 0.15, end = 0.8, direction = -1, name = NULL) +
+  labs(
+    title = "RA-only DMRs",
+    subtitle = sub_B,
+    x = NULL, y = NULL
+  ) +
+  theme_publish(base_size = 13, base_linewidth = 0.6) +
+  theme(legend.position = "none")
+
+# ============================================================
+# C) OA-only (same style as A) + enrichment subtitle
+# ============================================================
+
+oa_pat_tbl <- bind_rows(
+  pattern5_tbl(sw_list$OA_only_hyper, "OA-only", "Hyper"),
+  pattern5_tbl(sw_list$OA_only_hypo,  "OA-only", "Hypo")
+) %>%
+  mutate(
+    pattern   = factor(pattern, levels = pat_levels),
+    direction = factor(direction, levels = c("Hyper", "Hypo"))
+  )
+
+sub_C <- make_enr_subtitle2(enr_pat_tbl,
+                            hyper_set = "OA_only_hyper",
+                            hypo_set  = "OA_only_hypo",
+                            disease_tag = "OA")
+
+pC_oa <- ggplot(oa_pat_tbl, aes(x = direction, y = frac, fill = pattern)) +
+  geom_col(width = 0.72) +
+  geom_text(aes(label = paste0(round(100 * frac), "%")),
+            position = position_stack(vjust = 0.5),
+            size = 4, color = "white") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  scale_fill_viridis_d(option = "mako", begin = 0.15, end = 0.8, direction = -1, name = NULL) +
+  labs(
+    title = "OA-only DMRs",
+    subtitle = sub_C,
+    x = NULL, y = NULL
+  ) +
+  theme_publish(base_size = 13, base_linewidth = 0.6) +
+  theme(legend.position = "bottom")
+
+# ============================================================
+# Combine side-by-side (A | B | C)
+# ============================================================
+p_fig2d <- pA_shared | pB_ra | pC_oa
+p_fig2d
+
+ggsave("fig2d_A_B_C_side_by_side.pdf", p_fig2d, width = 8, height = 6)
+
+
+```
+
+
+
+# ----- To be deleted after this------
+##DMR lollipop plot
+These are only promoter regions
+abs(betavaluechange) > 0.1 pval <0.05
+
+```{r}
+#do lollipop plots using hyper or hypo methylated regions for only promoter regions
+#(top30 regions by mean deltaB difference)
+
+#single-condition lollipop plot (e.g. RA vs Healthy knee)
+dmr_plot_single <- function(dmr_df, string1, string2, hyper_or_hypo){
+  
+  #filter promoters with effect size
+  dmr_plot_filtered <- dmr_df %>%
+    filter(!is.na(annot.symbol) & abs(meandiff) > 0.1 & annot.type == "Promoter")
+  
+  if (hyper_or_hypo == "hyper"){
+    dmr_plot_filtered <- dmr_plot_filtered %>%
+      filter(meandiff > 0) %>%
+      arrange(desc(meandiff)) %>%
+      head(n = 30) 
+  } else if (hyper_or_hypo == "all"){
+    dmr_plot_filtered <- dmr_plot_filtered %>%
+      arrange(desc(meandiff)) 
+  } else {
+    dmr_plot_filtered <- dmr_plot_filtered %>%
+      filter(meandiff < 0) %>%
+      arrange(meandiff) %>%
+      head(n = 30) 
+  }
+  
+  #unique gene labels
+  dmr_plot_filtered$gene_label <- make.unique(as.character(dmr_plot_filtered$annot.symbol), sep="--")
+  dmr_plot_filtered$gene_label <- factor(
+    dmr_plot_filtered$gene_label,
+    levels = dmr_plot_filtered$gene_label[order(-dmr_plot_filtered$meandiff)]
+  )
+  #title
+  title <- paste0(string1, " ", string2, " - ", hyper_or_hypo)
+  
+  if (grepl("RA",string1)){
+    color_point <- "#A888B5"
+  }else {
+    color_point <- "#C5D3E8"
+  }
+  
+  #plot
+  p <- ggplot(dmr_plot_filtered,
+              aes(x = meandiff,
+                  y = gene_label,
+                  size = no.cpgs)) +
+    geom_point(color = color_point, alpha = 0.9) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+    scale_size_continuous(name = "Number of CpGs",
+                          range = c(3,6), breaks = c(5,15)) +
+    labs(title = title, x = "Delta Beta", y = "Genes") +
+    theme_publish(base_size = 14, base_linewidth = 0.7) +
+    theme(panel.grid.major.y = element_line(color = "grey90"),
+          plot.title = element_text(size=14)) +
+    guides(size = guide_legend(override.aes = list(color = color_point))) +
+    scale_x_continuous(breaks = seq(-1,1,by=0.1),
+                       expand = expansion(mult = c(0.1, 0.1)))
+  
+  ggsave(filename = paste0(string1, "_", string2, "-", hyper_or_hypo, ".png"),
+         plot = p, width = 8, height = 6.5, bg = "transparent")
+  ggsave(filename = paste0(string1, "_", string2, "-", hyper_or_hypo, ".pdf"),
+         plot = p, width = 8, height = 6.5)
+
+}
+
+# Example usage:
+# dmr_plot_single(dmr_ra_and_healthy_knee_df, "RA Knee", "vs Healthy Knee", "all")
+# dmr_plot_single(dmr_ra_and_healthy_knee_df, "RA Knee", "vs Healthy Knee", "hyper")
+# dmr_plot_single(dmr_ra_and_healthy_knee_df, "RA Knee", "vs Healthy Knee", "hypo")
+# dmr_plot_single(dmr_oa_and_healthy_knee_df, "OA Knee", "vs Healthy Knee", "all")
+# dmr_plot_single(dmr_oa_and_healthy_knee_df, "OA Knee", "vs Healthy Knee", "hyper")
+# dmr_plot_single(dmr_oa_and_healthy_knee_df, "OA Knee", "vs Healthy Knee", "hypo")
+# dmr_plot_single(dmr_oa_vs_ra_knee_df, "RA Knee", "vs OA Knee", "all")
+# dmr_plot_single(dmr_oa_vs_ra_knee_df, "RA Knee", "vs OA Knee", "hyper")
+# dmr_plot_single(dmr_oa_vs_ra_knee_df, "RA Knee", "vs OA Knee", "hypo")
+
+```
+
+###DMR ORA and further
+
+```{r}
+
+# ------ Promoter region genes --------- #
+
+#look at the promoter region genes and do pre-filtering according to deltab 
+#define universe genes
+universe_genes <- unique(annotation_file_filtered$genesUniq)
+universe_genes <- universe_genes[universe_genes != ""]
+
+#convert them to entrez IDs
+universe_entrez <- bitr(universe_genes,
+                            fromType = "SYMBOL",
+                            toType = "ENTREZID",
+                            OrgDb = org.Hs.eg.db)
+
+do_ora <- function(dmrs_of_interest){
+  
+  #do filtering
+  dmrs_of_interest <- dmrs_of_interest %>%
+    filter(!is.na(annot.symbol) & abs(meandiff) > 0.1 & annot.type == "Promoter")
+  
+  #define the genes of interest (from dmps)
+  genes_of_interest <- unique(dmrs_of_interest$annot.symbol)
+  genes_of_interest <- genes_of_interest[genes_of_interest != ""]
+  
+  genes_of_interest_entrez <- bitr(genes_of_interest, 
+                                   fromType = "SYMBOL",
+                                   toType = "ENTREZID",
+                                   OrgDb = org.Hs.eg.db)
+
+  reactome_res <- enrichPathway(
+    gene = genes_of_interest_entrez$ENTREZID,
+    universe = universe_entrez$ENTREZID,
+    organism = "human",
+    pvalueCutoff = 1,
+    readable = TRUE)
+
+  return(reactome_res@result)
+}
+
+ora_ra_vs_healthy_knee <- do_ora(dmr_ra_and_healthy_knee_df)
+ora_oa_vs_healthy_knee <- do_ora(dmr_oa_and_healthy_knee_df)
+
+# ------ Print them and further analysis in string-db  --------- #
+
+# #print them for further analysis in string-db (promoter absmeandif > 0.1)
+print_string <- function (dmrs_of_interest) {
+  dmrs_of_interest <- dmrs_of_interest %>%
+    filter(!is.na(annot.symbol) & abs(meandiff) > 0.1 & annot.type == "Promoter")
+  genes_of_interest <- unique(dmrs_of_interest$annot.symbol)
+  genes_of_interest <- genes_of_interest[!(genes_of_interest %in% c("",NA))]
+  genes_string <- paste(genes_of_interest,collapse = '","')
+  genes_string <- paste0('"', genes_string, '"')
+  cat(genes_string)
+  return(genes_string)
+}
+
+ra_dmr_genes_list <- print_string(dmr_ra_and_healthy_knee_df)
+oa_dmr_genes_list <- print_string(dmr_oa_and_healthy_knee_df)
+
+# ------ Check if they are expressed or not  --------- #
+
+read_counts <- readRDS("~/Desktop/PhD/2024 Second Term/RNA-seq all/nrm_counts_be_removed_mean.RDS")
+
+ra_dmr_genes <- eval(parse(text = paste0("c(", ra_dmr_genes_list, ")")))
+oa_dmr_genes <- eval(parse(text = paste0("c(", oa_dmr_genes_list, ")")))
+
+# > 5 counts in NS or TNF 
+check_expressed_genes <- function(gene_list, read_counts) {
+  read_counts %>%
+    filter(genename %in% gene_list) %>%
+    mutate(expressed = (NS > 5 | TNF > 5)) %>%
+    filter(expressed) %>%
+    select(genename)
+}
+
+# get expressed genes for each list
+ra_expressed <- check_expressed_genes(ra_dmr_genes, read_counts)
+oa_expressed <- check_expressed_genes(oa_dmr_genes, read_counts)
+
+# see how many of them are expressed 
+cat("RA expressed genes:", nrow(ra_expressed), "\n")
+cat(paste(ra_expressed$genename, collapse = ", "))
+cat("OA expressed genes:", nrow(oa_expressed), "\n")
+cat(paste(oa_expressed$genename, collapse = ", "))
+
+
+#plot it
+genes_to_plot <- ra_dmr_genes
+
+plot_df <- read_counts %>%
+  filter(genename %in% genes_to_plot) %>%
+  mutate(expressed = (NS > 5 | TNF > 5)) %>%
+  pivot_longer(cols = c(NS, TNF), names_to = "Condition", values_to = "Expression") %>%
+  mutate(
+    Expression_capped = pmin(pmax(0,Expression), 20),  # cap at 20
+    gene_label = ifelse(expressed, paste0("**", genename, "**"), genename)
+  )
+  
+
+#plotting
+source("custom_theme_ege.R")
+
+p <- ggplot(plot_df, aes(x = Condition, y = reorder(genename, Expression_capped), fill = Expression_capped)) +
+  geom_tile(color = "grey80") +  # adds light grid lines
+  scale_fill_viridis_c(
+    option = "C",
+    breaks = c(0, 5, 10, 20),
+    limits = c(0, 20),
+    name = "Expression"
+  ) +
+  geom_vline(xintercept = 1.5, color = "white", size = 0.8) +  # line between NS and TNF
+  labs(
+    title = "Expression of DMR-associated genes OA",
+    x = NULL, y = "Gene"
+  ) +
+  custom_theme_ege()
+
+
+ggsave(filename = "ra_promoter_dmr_expression.png",
+         plot = p, width = 4, height = 5, bg = "transparent")
+ggsave(filename = "ra_promoter_dmr_expression.pdf",
+         plot = p, width = 4, height = 5)
+
+# ------ Check if they are expressed in different stimulation conditions  --------- #
+
+stim_read_counts <- readRDS("~/Desktop/PhD/2024 First Term/RNA Sequencing from Tsuchiya et al./ra_expression_table.rds")
+
+# > 5 counts in any of the conditions
+check_expressed_genes_stim <- function(gene_list, read_counts) {
+  read_counts %>%
+    filter(genename %in% gene_list) %>%
+    mutate(expressed = (NS > 10 | TNFa > 10 | IFNa > 10 | IFNg > 10 | IL17 > 10 | IL18 > 10 | IL1b > 10 | IL6 > 10 | TGFb > 10 | all > 10 )) %>%
+    filter(expressed) %>%
+    select(genename)
+}
+
+# get expressed genes for each list
+ra_expressed_stim <- check_expressed_genes_stim(ra_dmr_genes, stim_read_counts)
+oa_expressed_stim <- check_expressed_genes_stim(oa_dmr_genes, stim_read_counts)
+
+# see how many of them are expressed 
+cat("RA expressed genes:", nrow(ra_expressed_stim), "\n")
+cat(paste(ra_expressed_stim$genename, collapse = ", "))
+cat("OA expressed genes:", nrow(oa_expressed_stim), "\n")
+cat(paste(oa_expressed_stim$genename, collapse = ", "))
+
+# ---- build heatmap data frame for plotting ----
+# choose which gene list to plot
+genes_to_plot <- ra_expressed_stim
+
+# columns of conditions present in your table (order them as you want)
+cond_cols <- c("NS","TNFa","IFNa","IFNg","IL17","IL18","IL1b","IL6","TGFb","all")
+
+plot_df <- stim_read_counts %>%
+  filter(genename %in% genes_to_plot$genename) %>%
+  select(genename, all_of(cond_cols)) %>%
+  pivot_longer(cols = -genename, names_to = "Condition", values_to = "Expression") %>%
+  # cap expression for color scale and remove extreme outliers
+  mutate(#Expression_capped = pmin(Expression, 20), # cap at 20 
+         Expression_log = log1p(Expression),#also put log1p 
+         is_expressed = Expression > 5) #see if it is expressed or not
+
+# order genes by mean expression across conditions (descending)
+gene_levels <- plot_df %>%
+  group_by(genename) %>%
+  summarise(meanExpr = mean(Expression, na.rm = TRUE)) %>%
+  arrange(meanExpr) %>%    # small -> top of plot
+  pull(genename)
+
+plot_df$genename <- factor(plot_df$genename, levels = gene_levels)
+plot_df$Condition <- factor(plot_df$Condition, levels = cond_cols)  # keep condition order
+
+cont_df <- plot_df %>% mutate(Expression_log = ifelse(is_expressed, Expression_log, NA_real_))
+
+p <- ggplot(cont_df, aes(x = Condition, y = genename, fill = Expression_log)) +
+  geom_tile(color = "grey80") +
+  scale_fill_viridis_c(option = "C", na.value = "white",
+                       name = "log1p(Expression)",
+                       guide = guide_colorbar(barwidth = 0.5, barheight = 8)) +
+  labs(x = NULL, y = "Gene", title = "Expression of Genes With Promoter DMRs") +
+  custom_theme_ege() +
+  theme(legend.position = "right",axis.text.x = element_text(face="bold", angle=45, hjust = 1))
+
+ggsave(filename = "ra_promoter_dmr_expression_diff_stims.png",
+         plot = p, width = 6, height = 5, bg = "transparent")
+ggsave(filename = "ra_promoter_dmr_expression_diff_stims.pdf",
+         plot = p, width = 6, height = 5)
+
+
+# ------ Promoter DMRs and expressed in Fibroblasts  --------- #
+
+dmr_promoter_expressed_ra <- dmr_ra_and_healthy_knee_df %>% filter (annot.symbol %in% ra_expressed$genename & annot.type == "Promoter" & abs(meandiff) > 0.1) %>% mutate(disease_group = "RA")
+
+dmr_promoter_expressed_oa <- dmr_oa_and_healthy_knee_df %>% filter (annot.symbol %in% oa_expressed$genename & annot.type == "Promoter" & abs(meandiff) > 0.1) %>% mutate(disease_group = "OA")
+
+dmr_promoter_expressed_combined <- bind_rows(dmr_promoter_expressed_oa,dmr_promoter_expressed_ra)
+
+#put them into categories
+dmr_promoter_expressed_combined <- dmr_promoter_expressed_combined %>%
+  mutate(category = case_when(
+    annot.symbol %in% c("EBF3","HLX","HLX-AS1","PITX2","ZBTB18","MITF") ~ "Homeobox / Developmental TF",
+    annot.symbol %in% c("PIWIL2","GAS5","LINC00944","MIR29B2CHG","VTRNA2-1") ~ "Noncoding / lncRNA",
+    annot.symbol %in% c("CFB","BCL6","C1QTNF3","CLU","HYAL1","ITIH4","LYVE1","PDGFA","PLA2G2A","SERPINA3","TNFRSF1A","PMEPA1") ~ "Immune / Cytokine Regulation",
+    annot.symbol %in% c("FGD4", "FGD5", "PRKCZ", "DUSP22", "GPR162", "MKNK1", "WWP2", "FGFR2", "ANKRD26", "MOB3C", "PMEPA1", "TRPV3","CREB5") ~ "Signaling / Receptor Pathways",
+    annot.symbol %in% c("CTNNA1", "HOOK2", "UNC45A", "LRRTM2", "IQCE", "SSPN", "MFAP5") ~ "Cytoskeleton / Adhesion",
+    annot.symbol %in% c("HSD17B14","PFKP","SLC26A4","LMBRD1","NNAT") ~ "Metabolism",
+    annot.symbol %in% c("CSTB","SERPINA3") ~ "Protease Inhibitors",
+    annot.symbol %in% c("SPATS2L") ~ "Post-transcriptional regulation",
+    annot.symbol %in% c("BLCAP") ~ "Cell Cycle / Apoptosis",
+    annot.symbol %in% c("WSCD1", "FAM43B","ZBTB37") ~ "Other / Poorly Characterized",
+    TRUE ~ "Other"
+  )) %>%
+  distinct(annot.symbol, disease_group, .keep_all = TRUE) %>%
+  mutate(gene_label = make.unique(as.character(annot.symbol), sep="--")) %>%
+  arrange(desc(meandiff)) %>%
+  mutate(gene_label = factor(gene_label, levels = gene_label[order(dmr_promoter_expressed_combined$meandiff)]))
+
+#colors
+disease_colors <- c(
+  "OA" = "#C5D3E8",
+  "RA" = "#A888B5"
+)
+
+p <- ggplot(dmr_promoter_expressed_combined,
+            aes(x = meandiff,
+                y = gene_label,
+                size = no.cpgs,
+                color = disease_group)) +
+    geom_point(alpha = 0.9) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+    scale_size_continuous(name = "Number of CpGs", range = c(3,6), breaks = c(5,15)) +
+    scale_color_manual(name = "Disease Specificity", values = disease_colors) +
+    labs(title = "DMRs by Functional Category and Disease Specificity",
+         x = "Delta Beta", y = "Genes") +
+    facet_wrap(~category, scales = "free_y", ncol = 2) +
+    custom_theme_ege() +
+    theme(panel.grid.major.y = element_line(color = "grey90"),
+          plot.title = element_text(size=14),
+          legend.key.size = unit(1.2, "lines")) +
+    guides(color = guide_legend(override.aes = list(size=5))) + 
+    scale_x_continuous(breaks = seq(-1,1,by=0.1),
+                       expand = expansion(mult = c(0.1, 0.1)))
+
+ggsave(filename = "dmrs_categorized_ra_and_oa.png",
+         plot = p, width = 10, height = 12, bg = "transparent")
+ggsave(filename = "dmrs_categorized_ra_and_oa.pdf",
+         plot = p, width = 10, height = 12)
+
+# ------ Promoter DMRs and expressed (across stimulatory conditions) in RA Fibroblasts  --------- #
+
+dmr_promoter_expressed_ra_stim <- dmr_ra_and_healthy_knee_df %>% filter (annot.symbol %in% ra_expressed_stim$genename & annot.type == "Promoter" & abs(meandiff) > 0.1) %>% mutate(disease_group = "RA")
+
+#put them into categories
+dmr_promoter_expressed_ra_stim <- dmr_promoter_expressed_ra_stim %>%
+  mutate(category = case_when(
+    annot.symbol %in% c("EBF3","HLX") ~ "Homeobox / Developmental TF",
+    annot.symbol %in% c("CFB","IRF8","ACKR1") ~ "Immune / Cytokine Regulation",
+    annot.symbol %in% c("FGD4", "FGD5") ~ "Signaling / Receptor Pathways",
+    annot.symbol %in% c("CTNNA1","HOOK2", "UNC45A", "LRRTM2") ~ "Cytoskeleton / Adhesion",
+    annot.symbol %in% c("HSD17B14","NNAT","MT3") ~ "Metabolism",
+    annot.symbol %in% c("SPATS2L","PIWIL2") ~ "Post-transcriptional regulation",
+    annot.symbol %in% c("BLCAP") ~ "Cell Cycle / Apoptosis",
+    TRUE ~ "Other"
+  )) %>%
+  distinct(annot.symbol, disease_group, .keep_all = TRUE) %>%
+  mutate(gene_label = make.unique(as.character(annot.symbol), sep="--")) %>%
+  arrange(desc(meandiff)) %>%
+  mutate(gene_label = factor(gene_label, levels = gene_label[order(dmr_promoter_expressed_ra_stim$meandiff)]))
+
+disease_colors <- c(
+  "OA" = "#C5D3E8",
+  "RA" = "#A888B5"
+)
+
+p <- ggplot(dmr_promoter_expressed_ra_stim,
+            aes(x = meandiff,
+                y = gene_label,
+                size = no.cpgs)) +
+    geom_point(alpha = 0.9, color = "#A888B5") +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+    scale_size_continuous(name = "Number of CpGs", range = c(3,6), breaks = c(5,15)) +
+    labs(title = "DMRs by Functional Category and Disease Specificity",
+         x = "Delta Beta", y = "Genes") +
+    facet_wrap(~category, scales = "free_y", ncol = 2) +
+    custom_theme_ege() +
+    theme(panel.grid.major.y = element_line(color = "grey90"),
+          plot.title = element_text(size=14),
+          legend.key.size = unit(1.2, "lines")) +
+    guides(color = guide_legend(override.aes = list(size=5))) + 
+    scale_x_continuous(breaks = seq(-1,1,by=0.1),
+                       expand = expansion(mult = c(0.1, 0.1)))
+
+ggsave(filename = "dmrs_categorized_ra_across_stim.png",
+         plot = p, width = 9, height = 7, bg = "transparent")
+ggsave(filename = "dmrs_categorized_ra_across_stim.pdf",
+         plot = p, width = 9, height = 7)
+
+
+```
+
+###DMR comparison
+DMRs obtained from RA vs Healthy compared to other contrasts 
+probe-wise aggregation (Stouffer’s method), similar to DMRcate 
+
+```{r}
+#we first read the dmps from other contrasts (e.g. knee vs shoulder within RA)
+dmps_from_other_contrasts <- readRDS("outputs - after xy removal/RA_vs_OA_results_without_xy.rds")
+ra_knee_vs_shoulder_dmps <- dmps_from_other_contrasts$RA_knee_vs_shoulder
+oa_knee_vs_shoulder_dmps <- dmps_from_other_contrasts$OA_knee_vs_shoulder
+
+#then we combine probe-wise p-values into a region-level statistic using Stouffer’s method (the same way DMRcate does internally) (here we use unweighted Stouffer)
+
+compute_stouffer_for_DMRs <- function(dmr_df, dmp_df, annotation_file) {
+
+  # annotation file with CpG coordinates
+  annotation_file_to_append <- annotation_file %>%
+    rownames_to_column("cpgs") %>% 
+    select(chr, pos, cpgs)
+  
+  # attach genomic positions to DMPs
+  dmp_df2 <- dmp_df %>%
+    rownames_to_column("cpgs") %>%
+    left_join(annotation_file_to_append, by = "cpgs") %>%
+    filter(!is.na(chr) & !is.na(pos)) %>%
+    select(cpgs, deltaB, P.Value, chr, pos)
+  
+  # convert to GRanges
+  cpg_gr <- GRanges(
+    seqnames = dmp_df2$chr,
+    ranges   = IRanges(start = dmp_df2$pos, width = 1),
+    strand   = "*",
+    deltaB   = dmp_df2$deltaB,
+    pval     = dmp_df2$P.Value
+  )
+  
+  dmr_gr <- GRanges(
+    seqnames = dmr_df$seqnames,
+    ranges   = IRanges(start = dmr_df$start, end = dmr_df$end),
+    strand   = "*"
+  )
+  
+  # find overlapping CpGs
+  hits <- findOverlaps(dmr_gr, cpg_gr)
+  dmr_cpgs <- data.frame(
+    dmr_idx = queryHits(hits),
+    deltaB  = mcols(cpg_gr)$deltaB[subjectHits(hits)],
+    pval    = mcols(cpg_gr)$pval[subjectHits(hits)]
+  )
+  
+  # compute region-level mean deltaB and Stouffer
+  region_stats <- dmr_cpgs %>%
+    group_by(dmr_idx) %>%
+    summarise(
+      mean_deltaB = mean(deltaB, na.rm = TRUE),
+      StoufferZ   = sum(qnorm(pval / 2, lower.tail = FALSE) * sign(deltaB), na.rm = TRUE) / sqrt(n()),
+      .groups = "drop"
+    ) %>%
+    mutate(StoufferP = 2 * pnorm(-abs(StoufferZ))) 
+  
+  # create output dataframe
+  out <- region_stats %>%
+    left_join((dmr_df %>% 
+                rownames_to_column("dmr_idx")%>%
+                select(dmr_idx,seqnames,
+                       start,end,width,no.cpgs,annot.symbol,
+                       annot.type) %>%
+                 mutate(dmr_idx = as.integer(dmr_idx)))
+              , by = "dmr_idx" ) %>%
+    select(-dmr_idx)
+
+  return(out)
+}
+
+ra_knee_vs_shoulder_dmrs_relative_to_ra_knee_dmps <- compute_stouffer_for_DMRs(dmr_ra_and_healthy_knee_df,ra_knee_vs_shoulder_dmps,annotation_file_filtered)
+
+oa_knee_vs_shoulder_dmrs_relative_to_ra_knee_dmps <- compute_stouffer_for_DMRs(dmr_ra_and_healthy_knee_df,oa_knee_vs_shoulder_dmps,annotation_file_filtered)
+
+oa_vs_healthy_knee_dmrs_relative_to_ra_knee_dmps <- compute_stouffer_for_DMRs(dmr_ra_and_healthy_knee_df,ra_and_oa_vs_healthy_list[[3]],annotation_file_filtered)
+
+```
+
+###DMR roadmap
+DMR roadmap explained in the dmr roadmap powerpoint presentation is done here
+(requires the DMR comparison - last code chunk)
+abs(deltab) > 0.1 & all regions not only promoters
+
+```{r}
+#DMR is first filtered -> absolute deltaB > 0.1 
+#also the annotations are discarded so that the true DMR number would be achieved
+#because a region can be associated with more than one gene
+dmr_ra_and_healthy_knee_df_filtered <- dmr_ra_and_healthy_knee_df %>%
+  group_by(seqnames, start, end) %>%
+  ungroup() %>%
+  # Keep only substantial mean differences and key columns
+  filter(abs(meandiff) > 0.1) %>%
+  select(seqnames, start, end, HMFDR, meandiff) %>%
+  distinct()
+#same for ra knee vs shoulder and oa knee vs shoulder oa healthy knee dmr relative dmrs
+ra_knee_vs_shoulder_dmrs_relative_to_ra_knee_dmps_filtered <- ra_knee_vs_shoulder_dmrs_relative_to_ra_knee_dmps %>%
+  filter(abs(mean_deltaB) > 0.1 & StoufferP < 0.05 )  %>% 
+  select(seqnames,start,end,StoufferP,mean_deltaB) %>%
+  distinct()
+
+oa_knee_vs_shoulder_dmrs_relative_to_ra_knee_dmps_filtered <- oa_knee_vs_shoulder_dmrs_relative_to_ra_knee_dmps %>%
+  filter(abs(mean_deltaB) > 0.1 & StoufferP < 0.05 )  %>% 
+  select(seqnames,start,end,StoufferP,mean_deltaB) %>%
+  distinct()
+
+oa_vs_healthy_knee_dmrs_relative_to_ra_knee_dmps_filtered <- oa_vs_healthy_knee_dmrs_relative_to_ra_knee_dmps %>%
+  filter(abs(mean_deltaB) > 0.1 & StoufferP < 0.05 )  %>% 
+  select(seqnames,start,end,StoufferP,mean_deltaB) %>%
+  distinct()
+
+paste0("The number of Knee-RA DMRs are: ", nrow(dmr_ra_and_healthy_knee_df_filtered))
+
+#we first ask the question are there knee RA DMRs present in RA knee vs shoulder (as DMR)
+dmr_ra_and_healthy_knee_test1 <- dmr_ra_and_healthy_knee_df_filtered %>%
+  left_join(ra_knee_vs_shoulder_dmrs_relative_to_ra_knee_dmps_filtered, by = c("seqnames","start","end"))
+
+#Decision tree
+
+#-----------------------------#
+
+##if yes
+dmr_ra_and_healthy_knee_test1yes <- dmr_ra_and_healthy_knee_test1 %>%
+  filter(!is.na(StoufferP))
+
+paste0("The number of Knee-RA DMRs that are present as RA knee vs shoulder DMR is: ",nrow(dmr_ra_and_healthy_knee_test1yes))
+
+####ask is the DMR present in OA Knee vs Shoulder
+dmr_ra_and_healthy_knee_test1yes_test2 <- dmr_ra_and_healthy_knee_test1yes %>%
+  left_join(oa_knee_vs_shoulder_dmrs_relative_to_ra_knee_dmps_filtered, by = c("seqnames","start","end"))
+
+#####if yes
+dmr_ra_and_healthy_knee_test1yes_test2yes <- dmr_ra_and_healthy_knee_test1yes_test2 %>%
+  filter(!is.na(StoufferP.y))
+
+paste0("The number of Knee-RA Joint Dependent DMRs that are in present in as DMR in OA knee vs shoulder : ",nrow(dmr_ra_and_healthy_knee_test1yes_test2yes))
+
+#####if no
+dmr_ra_and_healthy_knee_test1yes_test2no <- dmr_ra_and_healthy_knee_test1yes_test2 %>%
+  filter(is.na(StoufferP.y))
+
+paste0("The number of Knee-RA Joint Dependent DMRs that are NOT in present in as DMR in OA: ",nrow(dmr_ra_and_healthy_knee_test1yes_test2no))
+
+# --------------------------------#
+
+##if no 
+dmr_ra_and_healthy_knee_test1no <- dmr_ra_and_healthy_knee_test1 %>%
+  filter(is.na(StoufferP))
+
+paste0("The number of Knee-RA DMRs that are not present as RA knee vs shoulder DMR is: ",nrow(dmr_ra_and_healthy_knee_test1no))
+
+####ask is the DMR present in OA Knee vs Shoulder
+
+dmr_ra_and_healthy_knee_test1no_test2 <- dmr_ra_and_healthy_knee_test1no %>%  
+  left_join(oa_knee_vs_shoulder_dmrs_relative_to_ra_knee_dmps_filtered, 
+            by = c("seqnames","start","end"))
+
+#####if yes 
+
+dmr_ra_and_healthy_knee_test1no_test2yes <- dmr_ra_and_healthy_knee_test1no_test2 %>%
+  filter(!is.na(StoufferP.y))
+
+paste0("The number of Knee-RA Joint Independent DMRs that are in present in DMR in OA knee vs shoulder is: ",nrow(dmr_ra_and_healthy_knee_test1no_test2yes))
+
+#we dont have to ask more
+
+#####if no
+
+dmr_ra_and_healthy_knee_test1no_test2no <- dmr_ra_and_healthy_knee_test1no_test2 %>%
+  filter(is.na(StoufferP.y))
+
+paste0("The number of Knee-RA Joint Independent DMRs that are NOT present in DMR in OA knee vs shoulder is: ",nrow(dmr_ra_and_healthy_knee_test1no_test2no))
+
+######we ask one more -> is the DMR also a DMR in Knee OA DMR with the same direction? 
+
+dmr_ra_and_healthy_knee_test1no_test2no_test <- dmr_ra_and_healthy_knee_test1no_test2no %>%  
+  left_join(oa_vs_healthy_knee_dmrs_relative_to_ra_knee_dmps_filtered, 
+            by = c("seqnames","start","end"))
+
+#######if yes 
+
+dmr_ra_and_healthy_knee_test1no_test2no_testyes <- dmr_ra_and_healthy_knee_test1no_test2no_test %>%
+  filter(!is.na(StoufferP))
+
+paste0("The number of Knee-RA Joint Independent DMRs that are in present in DMR in OA knee vs shoulder and is a OA DMR (Healthy Knee is): ",nrow(dmr_ra_and_healthy_knee_test1no_test2no_testyes))
+
+#######if no 
+
+dmr_ra_and_healthy_knee_test1no_test2no_testno <- dmr_ra_and_healthy_knee_test1no_test2no_test %>%
+  filter(is.na(StoufferP))
+
+paste0("The number of Knee-RA Joint Independent DMRs that are in present in DMR in OA knee vs shoulder and is not OA DMR (Healthy Knee is): ",nrow(dmr_ra_and_healthy_knee_test1no_test2no_testno))
+```
+
+####Exploration on DMR roadmap results
+
+```{r}
+#clean the subcategories that we had from above and put the annotations back
+
+#yes path
+maybe_disease_and_joint_specific <- dmr_ra_and_healthy_knee_test1yes_test2yes %>%
+  select(seqnames,start,end,HMFDR,meandiff) %>%
+  left_join(dmr_ra_and_healthy_knee_df, 
+            by = c("seqnames","start","end","HMFDR","meandiff")) %>%
+  select(-c(min_smoothed_fdr,Stouffer,Fisher,maxdiff))
+
+maybe_ra_joint_specific <- dmr_ra_and_healthy_knee_test1yes_test2no %>%
+  select(seqnames,start,end,HMFDR,meandiff) %>%
+  left_join(dmr_ra_and_healthy_knee_df, 
+            by = c("seqnames","start","end","HMFDR","meandiff")) %>%
+  select(-c(min_smoothed_fdr,Stouffer,Fisher,maxdiff))
+
+#no path
+maybe_ra_specific_effect_in_knee <- dmr_ra_and_healthy_knee_test1no_test2yes %>%
+  select(seqnames,start,end,HMFDR,meandiff) %>%
+  left_join(dmr_ra_and_healthy_knee_df, 
+            by = c("seqnames","start","end","HMFDR","meandiff")) %>%
+  select(-c(min_smoothed_fdr,Stouffer,Fisher,maxdiff))
+
+general_disease_effect_dmrs <- dmr_ra_and_healthy_knee_test1no_test2no_testyes %>%
+  select(seqnames,start,end,HMFDR,meandiff) %>%
+  left_join(dmr_ra_and_healthy_knee_df, 
+            by = c("seqnames","start","end","HMFDR","meandiff")) %>%
+  select(-c(min_smoothed_fdr,Stouffer,Fisher,maxdiff))
+
+ra_specific_joint_independent_dmrs <- dmr_ra_and_healthy_knee_test1no_test2no_testno %>%
+  select(seqnames,start,end,HMFDR,meandiff) %>%
+  left_join(dmr_ra_and_healthy_knee_df, 
+            by = c("seqnames","start","end","HMFDR","meandiff")) %>%
+  select(-c(min_smoothed_fdr,Stouffer,Fisher,maxdiff))
+
+#lollipop plots for Promoter regions
+dmr_plot_single <- function(dmr_df, title, width,height){
+  
+  #filter promoters with effect size
+  dmr_plot_filtered <- dmr_df %>%
+    filter(!is.na(annot.symbol) & annot.type == "Promoter") %>%
+    arrange(desc(meandiff))
+  
+  #unique gene labels
+  dmr_plot_filtered$gene_label <- make.unique(as.character(dmr_plot_filtered$annot.symbol), sep="--")
+  dmr_plot_filtered$gene_label <- factor(
+    dmr_plot_filtered$gene_label,
+    levels = dmr_plot_filtered$gene_label[order(-dmr_plot_filtered$meandiff)]
+  )
+
+  #plot
+  p <- ggplot(dmr_plot_filtered,
+              aes(x = meandiff,
+                  y = gene_label,
+                  size = no.cpgs)) +
+    geom_point(color = "#A888B5", alpha = 0.9) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+    scale_size_continuous(name = "Number of CpGs",
+                          range = c(3,6), breaks = c(5,15)) +
+    labs(title = title, x = "Delta Beta", y = "Genes") +
+    theme_publish(base_size = 14, base_linewidth = 0.7) +
+    theme(panel.grid.major.y = element_line(color = "grey90"),
+          plot.title = element_text(size=14)) +
+    guides(size = guide_legend(override.aes = list(color = "#A888B5"))) +
+    scale_x_continuous(breaks = seq(-1,1,by=0.1),
+                       expand = expansion(mult = c(0.1, 0.1)))
+  
+  ggsave(filename = paste0(title, "_lollipop_plot.png"),
+         plot = p, width = width, height = height, bg = "transparent")
+  ggsave(filename = paste0(title, "_lollipop_plot.pdf"),
+         plot = p, width = width, height = height)
+
+}
+
+dmr_plot_single(maybe_disease_and_joint_specific, title = "Disease and Joint Specific DMRs",width= 6, height = 4)
+
+dmr_plot_single(maybe_ra_joint_specific, title = "RA Joint Specific DMRs",width= 6, height = 4)
+
+dmr_plot_single(maybe_ra_specific_effect_in_knee, title = "RA Specific (in knee) DMRs",width= 5, height = 3)
+
+dmr_plot_single(general_disease_effect_dmrs, title = "General Disease Effect DMRs",width= 5, height = 10)
+
+dmr_plot_single(ra_specific_joint_independent_dmrs, title = "RA Specific Effect\n(joint independent) DMRs",width= 5, height = 6.5)
+
+#---- ORA -----
+
+#define universe genes
+universe_genes <- unique(annotation_file_filtered$genesUniq)
+universe_genes <- universe_genes[universe_genes != ""]
+
+#convert them to entrez IDs
+universe_entrez <- bitr(universe_genes,
+                            fromType = "SYMBOL",
+                            toType = "ENTREZID",
+                            OrgDb = org.Hs.eg.db)
+
+do_ora <- function(dmrs_of_interest){
+  
+  #define the genes of interest (from dmps)
+  genes_of_interest <- unique(dmrs_of_interest$annot.symbol)
+  genes_of_interest <- genes_of_interest[genes_of_interest != ""]
+  
+  genes_of_interest_entrez <- bitr(genes_of_interest, 
+                                   fromType = "SYMBOL",
+                                   toType = "ENTREZID",
+                                   OrgDb = org.Hs.eg.db)
+
+  reactome_res <- enrichPathway(
+    gene = genes_of_interest_entrez$ENTREZID,
+    universe = universe_entrez$ENTREZID,
+    organism = "human",
+    pvalueCutoff = 1,
+    readable = TRUE)
+
+  return(reactome_res@result)
+}
+
+ora_disease_joint_specific <- do_ora(maybe_disease_and_joint_specific)
+ora_ra_joint_specific <- do_ora(maybe_ra_joint_specific)
+ora_ra_specific_in_knee <- do_ora(maybe_ra_specific_effect_in_knee)
+ora_general_disease_effect <- do_ora(general_disease_effect_dmrs)
+ora_ra_specific_joint_indenpendent <- do_ora(ra_specific_joint_independent_dmrs)
+
+#return string form of the genes ---
+print_string <- function (dmrs_of_interest) {
+  genes_of_interest <- unique(dmrs_of_interest$annot.symbol)
+  genes_of_interest <- genes_of_interest[!(genes_of_interest %in% c("",NA))]
+  genes_string <- paste(genes_of_interest,collapse = '","')
+  genes_string <- paste0('"', genes_string, '"')
+  cat(genes_string)
+}
+
+print_string(maybe_disease_and_joint_specific)
+print_string(maybe_ra_joint_specific)
+print_string(maybe_ra_specific_effect_in_knee)
+print_string(general_disease_effect_dmrs)
+print_string(ra_specific_joint_independent_dmrs)
+
+# ------ Combine the joint-confounded categories and make a lollipop plot ---------
+
+maybe_disease_and_joint_specific <- maybe_disease_and_joint_specific %>%
+  mutate(disease_group = "Arthritis-joint")
+maybe_ra_joint_specific <- maybe_ra_joint_specific %>%
+  mutate(disease_group = "RA-joint")
+maybe_ra_specific_effect_in_knee <- maybe_ra_specific_effect_in_knee %>%
+  mutate(disease_group = "RA-joint")
+dmr_combined <- bind_rows(maybe_disease_and_joint_specific,
+                          maybe_ra_joint_specific,
+                          maybe_ra_specific_effect_in_knee)
+#do categorization 
+dmr_combined <- dmr_combined %>%
+  mutate(category = case_when(
+    annot.symbol %in% c("IRX1","IRX2","DLX6-AS1","MEIS2","WT1","PAX1","EBF3","TBX18","HLX","HLX-AS1") ~ "Homeobox / developmental TF",
+    annot.symbol %in% c("HDAC4","PRDM6","BIRC5","FOXO1") ~ "Epigenetic / cell cycle regulators",
+    annot.symbol %in% c("IRF8","CD8A","CFB","ACKR1") ~ "Immune / cytokine regulation",
+    annot.symbol %in% c("IGF1R","CTNNA1","SDK1","CADM3-AS1") ~ "Signaling / adhesion",
+    annot.symbol %in% c("PIWIL2","PIWIL2-DT","LOC124901353","LOC105374618","LOC101927914","MIR193B","MIR193BHG") ~ "Noncoding / pseudogene / lncRNA",
+    TRUE ~ "Other"
+  ))
+
+#filtering before plotting
+dmr_combined <- dmr_combined %>%
+  filter(!is.na(annot.symbol)) %>%      # remove NA genes
+  filter(category != "Other") %>%       # remove 'Other'
+  distinct(annot.symbol, disease_group, .keep_all = TRUE) %>% # one row per DMR–gene
+  mutate(gene_label = make.unique(as.character(annot.symbol), sep="--")) %>%
+  arrange(desc(meandiff)) %>%
+  mutate(gene_label = factor(gene_label, levels = gene_label[order(dmr_combined$meandiff)]))
+
+#colors for the categories
+disease_colors <- c(
+  "Arthritis-joint" = "#2F5755",
+  "RA-joint" = "#A888B5"
+)
+
+#plotting
+p <- ggplot(dmr_combined,
+            aes(x = meandiff,
+                y = gene_label,
+                size = no.cpgs,
+                color = disease_group)) +
+    geom_point(alpha = 0.9) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+    scale_size_continuous(name = "Number of CpGs", range = c(3,6), breaks = c(5,15)) +
+    scale_color_manual(name = "Disease Specificity", values = disease_colors) +
+    labs(title = "DMRs by Functional Category and Disease Specificity",
+         x = "Delta Beta", y = "Genes") +
+    facet_wrap(~category, scales = "free_y", ncol = 2) +
+    theme_publish(base_size = 14, base_linewidth = 0.7) +
+    theme(panel.grid.major.y = element_line(color = "grey90"),
+          plot.title = element_text(size=14),
+          legend.key.size = unit(1.2, "lines"),  # bigger legend points
+          legend.title = element_text(size = 12),
+          legend.text = element_text(size = 10)) +
+    guides(color = guide_legend(override.aes = list(size=5))) + 
+    scale_x_continuous(breaks = seq(-1,1,by=0.1),
+                       expand = expansion(mult = c(0.1, 0.1)))
+
+ggsave(filename = "joint_confounded_categories_lollipop.png",
+         plot = p, width = 10, height = 8, bg = "transparent")
+
+# ------ Combine the joint-independent categories and make a lollipop plot ---------
+
+general_disease_effect_dmrs <- general_disease_effect_dmrs %>%
+  mutate(disease_group = "Arthritis Effect")
+ra_specific_joint_independent_dmrs <- ra_specific_joint_independent_dmrs %>%
+  mutate(disease_group = "RA Specific Effect")
+dmr_combined <- bind_rows(general_disease_effect_dmrs,
+                          ra_specific_joint_independent_dmrs)
+
+#do categorization 
+dmr_combined <- dmr_combined %>%
+  mutate(category = case_when(
+    annot.symbol %in% c("HOXD11","SUMF1","LRRTM1","RGS6","ADARB2","RBFOX1","WT1","FOXO1","IGF1R","BIRC5","EBF3","TBX3") ~ "Homeobox / developmental TF",
+    annot.symbol %in% c("CIITA","CRP","CFB","HSH2D","IRF8") ~ "Immune / inflammatory",
+    annot.symbol %in% c("GPX5","GPX6","FTMT","SLC7A2") ~ "Iron / oxidative metabolism",
+    annot.symbol %in% c("DSG4","MFAP2","OPCML","DSG1-AS1") ~ "ECM / adhesion / cytoskeleton",
+    TRUE ~ "Other"
+  ))
+
+dmr_combined <- dmr_combined %>%
+  filter(!is.na(annot.symbol)) %>%      # remove NA genes
+  filter(category != "Other") %>%       # remove 'Other'
+  distinct(annot.symbol, disease_group, .keep_all = TRUE) %>% # one row per DMR–gene
+  mutate(gene_label = make.unique(as.character(annot.symbol), sep="--")) %>%
+  arrange(desc(meandiff)) %>%
+  mutate(gene_label = factor(gene_label, levels = gene_label[order(dmr_combined$meandiff)]))
+
+#colors for the categories
+disease_colors <- c(
+  "Arthritis Effect" = "#2F5755",
+  "RA Specific Effect" = "#A888B5"
+)
+
+#plotting
+p <- ggplot(dmr_combined,
+            aes(x = meandiff,
+                y = gene_label,
+                size = no.cpgs,
+                color = disease_group)) +
+    geom_point(alpha = 0.9) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+    scale_size_continuous(name = "Number of CpGs", range = c(3,6), breaks = c(5,15)) +
+    scale_color_manual(name = "Disease Specificity", values = disease_colors) +
+    labs(title = "DMRs by Functional Category and Disease Specificity",
+         x = "Delta Beta", y = "Genes") +
+    facet_wrap(~category, scales = "free_y", ncol = 2) +
+    theme_publish(base_size = 14, base_linewidth = 0.7) +
+    theme(panel.grid.major.y = element_line(color = "grey90"),
+          plot.title = element_text(size=14),
+          legend.key.size = unit(1.2, "lines"),  # bigger legend points
+          legend.title = element_text(size = 12),
+          legend.text = element_text(size = 10)) +
+    guides(color = guide_legend(override.aes = list(size=5))) + 
+    scale_x_continuous(breaks = seq(-1,1,by=0.1),
+                       expand = expansion(mult = c(0.1, 0.1)))
+
+ggsave(filename = "joint_independent_categories_lollipop.png",
+         plot = p, width = 10, height = 8, bg = "transparent")
+
+
+#---- To check if they overlap with the risk variants-----
+
+# #read risk snps (all of them)
+# ra_cred_snps_all <- read.delim("~/Desktop/PhD/2024 Second Term/SNP analysis/RA_all_cred_hg38_PP.bed",header = FALSE)
+# 
+# # convert to granges
+# snp_gr <- GRanges(
+#   seqnames = ra_cred_snps_all$V1,
+#   ranges = IRanges(
+#     start = ra_cred_snps_all$V2,
+#     end = ra_cred_snps_all$V3))
+# 
+# # find overlapping ra risk snps with the dmrs
+# find_overlaps_with_risk_snps <- function(dmr_df) {
+#   #convert dmr to granges
+#   dmr_gr <- GRanges(
+#     seqnames = dmr_df$seqnames,
+#     ranges = IRanges(
+#       start = dmr_df$start,
+#       end = dmr_df$end),
+#     gene = dmr_df$annot.symbol,
+#     disease_group = dmr_df$disease_group)
+#   hits <- findOverlaps(dmr_gr, snp_gr)
+#   dmr_snps_overlap <- dmr_df[unique(queryHits(hits)), ]
+#   return(dmr_snps_overlap)
+#   }
+# 
+# -------- none of them overlap
+
+# ------ do annotatr with chromhmm tracks -------
+
+#read the chromhmm dfs
+ra_knee_chromhmm_df <- read.table("chromhmm tracks/ra_knee_368.bed", sep = "\t", header = FALSE, stringsAsFactors = FALSE)
+
+healthy_knee_chromhmm_df <-read.table("chromhmm tracks/healthy_knee_88.bed", sep = "\t", header = FALSE, stringsAsFactors = FALSE) 
+
+find_chromhmm_overlaps <- function(chromhmm_df, dmr_df){
+  
+  #read the chromhmm dataframe 
+  colnames(chromhmm_df) <- c("chr", "start", "end", "state")
+
+  #convert the chromatin states to their biological meaning
+  chromhmm_state_map <- data.frame(
+  state = paste0("E", 1:18),
+  annotation = c(
+    "Active TSS",
+    "Flanking Active TSS",
+    "Transcription at gene 5′ and 3′",
+    "Strong transcription",
+    "Weak transcription",
+    "Genic enhancer",
+    "Enhancer 1",
+    "Enhancer 2",
+    "Bivalent/Poised TSS",
+    "Bivalent enhancer",
+    "Repressed PolyComb",
+    "ZNF genes & repeats",
+    "Heterochromatin",
+    "Quiescent/Low",
+    "Repetitive/Quiescent",
+    "Weak promoter/poised",
+    "Weak enhancer",
+    "Repressed/CTCF"
+    )
+  )
+
+  #biological label to chromhmm
+  chromhmm_df <- chromhmm_df %>%
+    left_join(chromhmm_state_map, by = "state") %>% 
+    select(!state)
+
+  #convert both dfs to granges
+  dmr_gr <- GRanges(
+    seqnames = dmr_df$seqnames,
+    ranges = IRanges(start = dmr_df$start, end = dmr_df$end),
+    mcols = dmr_df)
+  
+  chromhmm_gr <- GRanges(
+    seqnames = chromhmm_df$chr,
+    ranges = IRanges(start = chromhmm_df$start, end = chromhmm_df$end),
+    annotation = chromhmm_df$annotation)
+  
+  #find overlaps
+  hits <- findOverlaps(dmr_gr, chromhmm_gr)
+  
+  #combine dmrs with chromhmm annotation
+  dmr_with_state <- dmr_df[queryHits(hits), ] %>%
+    mutate(
+      chromhmm_label = chromhmm_gr$annotation[subjectHits(hits)]
+    )
+  
+  dmr_annotations <- dmr_with_state %>%
+    select(seqnames, start, end, chromhmm_label) %>%
+    distinct() %>%
+    group_by(seqnames, start, end) %>%
+    summarise(chromhmm_labels = list(unique(chromhmm_label)), .groups = "drop") %>%
+    unnest(chromhmm_labels) %>%
+    mutate(present = 1) %>%
+    pivot_wider(
+      names_from = chromhmm_labels,
+      values_from = present,
+      values_fill = 0
+    )
+  
+  upset_data <- dmr_annotations %>%
+    select(-c(seqnames, start, end)) %>%
+    as.data.frame()  
+  
+  return(list(
+    dmr_with_annotations = dmr_with_state,
+    upset_data = upset_data
+  ))
+}
+
+#you can go to the upset plot code chunk above and do the plotting
+test <- find_chromhmm_overlaps(ra_knee_chromhmm_df,general_disease_effect_dmrs)
+
+
+```
+
+#####Upset plots of ChromHMM tracks from the categories above
+
+```{r}
+#do one by one otherwise it doesnt work ... 
+
+#change the upset_data return here
+dmr_chromhmm_return <-test
+  
+png("dmr_chromhmm_upset.png", width = 2500, height = 2200, units = "px")
+
+upset(
+  dmr_chromhmm_return$upset_data,
+  sets = colnames(dmr_chromhmm_return$upset_data),
+  order.by = "freq",
+  point.size = 20,
+  line.size = 3,
+  mainbar.y.label = NULL,
+  sets.x.label = NULL,
+  number.angles = 0,
+  text.scale = 8,
+  nintersects = 10
+)
+
+dev.off()
+```
+
+###-end
+###after this is draft
+
+###DMR lollipop plots - comparisons? 
+The data frames constructed in the dmr annotation part should be used
+for ra interaction results
+
+```{r}
+#first we have to calculate deltaB_RA and deltaB_OA so that we can plot it
+compute_deltaB_for_DMRs <- function(dmr_df,dmp_df,annotation_file){
+  
+  #to calculate mean beta values for dmrs and getting both of them (RA and OA) we have to map the dmps to dmrs
+  #get the coordinations of the dmps from annotation file
+  annotation_file_to_append <- annotation_file %>%
+    rownames_to_column("cpgs") %>% 
+    select("chr","pos","cpgs")
+  
+  dmp_df <- dmp_df %>%
+    rownames_to_column("cpgs") %>%
+    left_join(annotation_file_to_append, by ="cpgs") %>%
+    select(c("cpgs","deltaB_RA","deltaB_OA","deltadeltaB","chr","pos"))
+  
+  #convert it to a granges object
+  cpg_gr <- GRanges(
+    seqnames = dmp_df$chr,
+    ranges = IRanges(start = dmp_df$pos, width = 1),
+    strand = "*",
+    deltaB_RA = dmp_df$deltaB_RA,
+    deltaB_OA = dmp_df$deltaB_OA
+  )
+  
+  #compute mean deltaB_RA and mean deltaB_OA from cpgs
+  dmr_df <- GRanges(
+    seqnames = dmr_df$seqnames,
+    ranges = IRanges(start = dmr_df$start, end = dmr_df$end),
+    strand = "*",
+    HMFDR =dmr_df$HMFDR,
+    meandiff = dmr_df$meandiff,
+    annot.symbol = dmr_df$annot.symbol,
+    annot.type = dmr_df$annot.type,
+    no.cpgs = dmr_df$no.cpgs
+  )
+  #find the cpgs overlapping with the dmrs
+  hits <- findOverlaps(dmr_df, cpg_gr)
+  dmr_df_new <- data.frame(
+    dmr = queryHits(hits),
+    deltaB_RA = mcols(cpg_gr)$deltaB_RA[subjectHits(hits)],
+    deltaB_OA = mcols(cpg_gr)$deltaB_OA[subjectHits(hits)]
+  )
+  
+  mean_deltas <- dmr_df_new %>%
+    group_by(dmr) %>%
+    summarise(
+      mean_deltaB_RA = mean(deltaB_RA, na.rm = TRUE),
+      mean_deltaB_OA = mean(deltaB_OA, na.rm = TRUE)
+    )
+  
+  #append to the dmr granges
+  mcols(dmr_df)$mean_deltaB_RA[mean_deltas$dmr] <- mean_deltas$mean_deltaB_RA
+  mcols(dmr_df)$mean_deltaB_OA[mean_deltas$dmr] <- mean_deltas$mean_deltaB_OA
+  # you can check if your computing was right
+  # mcols(dmr_df)$mean_deltadeltaB <-
+  #   mcols(dmr_df)$mean_deltaB_RA -
+  #   mcols(dmr_df)$mean_deltaB_OA
+  # it is very accurate
+  return(dmr_df)
+}
+
+#compute deltaB_RA and deltaB_OA for interactions
+ra_interaction_hand_vs_shoulder_dmrs <- compute_deltaB_for_DMRs(interaction_hand_vs_shoulder_dmr_df,ra_vs_oa_list[[10]],annotation_file)
+
+ra_interaction_knee_vs_shoulder_dmrs <- compute_deltaB_for_DMRs(interaction_knee_vs_shoulder_dmr_df,ra_vs_oa_list[[11]],annotation_file)
+
+ra_interaction_knee_vs_hand_dmrs <- compute_deltaB_for_DMRs(interaction_knee_vs_hand_dmr_df,ra_vs_oa_list[[12]],annotation_file)
+
+#modified lollipop plot with the deltaB_RA and deltaB_OA different colors
+#only looking at the promoter regions
+dmr_plot_maker <- function(granges_object, string1, string2,up_or_down){
+  
+  dmr_plot <- as.data.frame(granges_object)
+  dmr_plot_filtered <- dmr_plot %>%
+    filter(!is.na(annot.symbol) & abs(meandiff) > 0.1 & annot.type =="Promoter" )
+  
+  if (up_or_down == "up"){
+      dmr_plot_filtered <- dmr_plot_filtered %>%
+        arrange(desc(meandiff)) %>%
+        slice_head(n = 30) 
+  }else {
+      dmr_plot_filtered <- dmr_plot_filtered %>%
+        arrange(meandiff) %>%
+        slice_head(n = 30) 
+  }
+
+  #factor it for yaxis
+  #separating the genes with multiple entries
+  dmr_plot_filtered$gene_label <- make.unique(as.character(dmr_plot_filtered$annot.symbol), sep="--")
+  dmr_plot_filtered$gene_label <- factor(
+    dmr_plot_filtered$gene_label,
+    levels = dmr_plot_filtered$gene_label[order(-dmr_plot_filtered$mean_deltaB_RA)]
+  )
+  # Reshape data to long format for deltaB_RA and deltaB_OA
+  dmr_long <- dmr_plot_filtered %>%
+    pivot_longer(cols = c(mean_deltaB_RA, mean_deltaB_OA),
+                 names_to = "condition", values_to = "deltaB") %>%
+    mutate(condition = recode(condition,
+                              mean_deltaB_RA = "RA",
+                              mean_deltaB_OA = "OA"))
+
+  # Title logic
+  title <- paste0(string1, " in\n", string2, "-",up_or_down)
+
+  # Plot
+  p <- ggplot() +
+    # Line segment between RA and OA values
+    geom_segment(data = dmr_plot_filtered,
+                 aes(y = gene_label,
+                     x = mean_deltaB_RA,
+                     xend = mean_deltaB_OA,
+                     yend = gene_label),
+                 color = "grey60") +
+    # Points for RA and OA
+    geom_point(data = dmr_long,
+               aes(x = deltaB, 
+                   y = gene_label, 
+                   color = condition,
+                   size = no.cpgs),
+               , alpha=0.9) +
+    scale_size_continuous(name = "Number of CpGs",range = c(3,6),breaks=c(5,15))+
+    geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+    scale_color_manual(values = c("RA" = "#A888B5", "OA" = "#C5D3E8"),
+                       name = "Condition") +
+    labs(title = title, x = "Delta Beta", y = "Genes") +
+    theme_publish(base_size = 14, base_linewidth = 0.7) +
+    theme(panel.grid.major.y = element_line(color = "grey90"),
+          plot.title = element_text(size=14)) +
+    guides(color = guide_legend(override.aes = list(size = 5)))+
+    scale_x_continuous(breaks = seq(-1,1,by=0.1),
+      ,expand = expansion(mult = c(0.1, 0.1)))
+  
+  ggsave(filename = paste0(string1, "_", string2, "-", up_or_down, ".png"),
+         plot = p, width = 8, height = 6.5, bg = "transparent")
+}
+
+# dmr_plot_maker(ra_interaction_hand_vs_shoulder_dmrs, "RA Interaction", "Hand vs Shoulder", "up" )
+# dmr_plot_maker(ra_interaction_hand_vs_shoulder_dmrs, "RA Interaction", "Hand vs Shoulder", "down" )
+# 
+# dmr_plot_maker(ra_interaction_knee_vs_shoulder_dmrs, "RA Interaction", "Knee vs Shoulder","up" )
+# dmr_plot_maker(ra_interaction_knee_vs_shoulder_dmrs, "RA Interaction", "Knee vs Shoulder","down" )
+# 
+# dmr_plot_maker(ra_interaction_knee_vs_hand_dmrs, "RA Interaction", "Knee vs Hand", "up" )
+# dmr_plot_maker(ra_interaction_knee_vs_hand_dmrs, "RA Interaction", "Knee vs Hand", "down" )
+
+
+```
+
+##Functional DMR related - promoters
+
+```{r}
+#to do lollipop plots with the functional regions (promoter region)
+#for interaction comparisons
+
+func_dmr_maker_interaction <- function(ra_dmrs_df, ra_dmps_df){
+  
+  # Add empty columns
+  ra_dmrs_df$mean_deltaB_RA <- NA
+  ra_dmrs_df$mean_deltaB_OA <- NA
+  ra_dmrs_df$meandiff <- NA
+  
+  # Loop through each row
+  for (i in seq_len(nrow(ra_dmrs_df))) {
+    # Extract leading-edge CpGs
+    cpgs <- strsplit(ra_dmrs_df$leadingEdge[i], ",\\s*")[[1]]
+    
+    # Subset the corresponding deltaB table
+    subset_vals <- ra_dmps_df[cpgs, , drop = FALSE]
+    
+    # Compute means and append it to func dmr table
+    ra_dmrs_df$mean_deltaB_RA[i] <- mean(subset_vals$deltaB_RA, na.rm = TRUE)
+    ra_dmrs_df$mean_deltaB_OA[i] <- mean(subset_vals$deltaB_OA, na.rm = TRUE)
+    ra_dmrs_df$meandiff[i] <- mean(subset_vals$deltadeltaB, na.rm = TRUE)
+  }
+  return(ra_dmrs_df)
+  }
+
+#read the object from mcsea functional dmr analysis
+ra_vs_oa_func_dmr_list <- readRDS("RA_vs_OA_promoter_dmr_results.rds")
+
+#compute deltaB_RA and OA values from the dmp list using leading edge cpgs from dmrs 
+ra_interaction_hand_vs_shoulder_func_dmrs <- ra_vs_oa_func_dmr_list[[10]]
+ra_interaction_hand_vs_shoulder_func_dmrs <- func_dmr_maker_interaction(ra_interaction_hand_vs_shoulder_func_dmrs,ra_vs_oa_list[[10]] )
+
+ra_interaction_knee_vs_shoulder_func_dmrs <- ra_vs_oa_func_dmr_list[[11]]
+ra_interaction_knee_vs_shoulder_func_dmrs <- func_dmr_maker_interaction(ra_interaction_knee_vs_shoulder_func_dmrs,ra_vs_oa_list[[11]] )
+
+ra_interaction_knee_vs_hand_func_dmrs <- ra_vs_oa_func_dmr_list[[12]]
+ra_interaction_knee_vs_hand_func_dmrs <- func_dmr_maker_interaction(ra_interaction_knee_vs_hand_func_dmrs,ra_vs_oa_list[[12]] )
+
+func_dmr_plot_maker <- function(dmr_plot, string1, string2,up_or_down){
+  
+  dmr_plot <- dmr_plot[order(dmr_plot$padj),]
+  #top30 up or down
+  if (up_or_down == "up"){
+      dmr_plot_filtered <- dmr_plot %>%
+        arrange(desc(meandiff)) %>%
+        slice_head(n = 30) 
+  }else {
+      dmr_plot_filtered <- dmr_plot %>%
+        arrange(meandiff) %>%
+        slice_head(n = 30) 
+  }
+
+  #factor it for yaxis
+  dmr_plot_filtered$gene <- factor(
+    dmr_plot_filtered$gene,
+    levels = dmr_plot_filtered$gene[order(-dmr_plot_filtered$mean_deltaB_RA)]
+  )
+  # Reshape data to long format for deltaB_RA and deltaB_OA
+  dmr_long <- dmr_plot_filtered %>%
+    pivot_longer(cols = c(mean_deltaB_RA, mean_deltaB_OA),
+                 names_to = "condition", values_to = "deltaB") %>%
+    mutate(condition = recode(condition,
+                              mean_deltaB_RA = "RA",
+                              mean_deltaB_OA = "OA"))
+
+  # Title logic
+  title <- paste0(string1, " in\n", string2, "-",up_or_down)
+
+  # Plot
+  p <- ggplot() +
+    # Line segment between RA and OA values
+    geom_segment(data = dmr_plot_filtered,
+                 aes(y = gene,
+                     x = mean_deltaB_RA,
+                     xend = mean_deltaB_OA,
+                     yend = gene),
+                 color = "grey60") +
+    # Points for RA and OA
+    geom_point(data = dmr_long,
+               aes(x = deltaB, 
+                   y = gene, 
+                   color = condition,
+                   size = size),
+               , alpha=0.9) +
+    scale_size_continuous(name = "Number of CpGs",range = c(3,6),breaks=c(5,15))+
+    geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+    scale_color_manual(values = c("RA" = "#A888B5", "OA" = "#C5D3E8"),
+                       name = "Condition") +
+    labs(title = title, x = "Delta Beta", y = "Genes") +
+    theme_publish(base_size = 14, base_linewidth = 0.7) +
+    theme(panel.grid.major.y = element_line(color = "grey90"),
+          plot.title = element_text(size=14)) +
+    guides(color = guide_legend(override.aes = list(size = 5)))+
+    scale_x_continuous(breaks = seq(-1,1,by=0.1),
+      ,expand = expansion(mult = c(0.1, 0.1)))
+  
+  ggsave(filename = paste0(string1, "_", string2,"_",up_or_down, ".png"),
+         plot = p, width = 8, height = 6.5, bg = "transparent")
+}
+
+# func_dmr_plot_maker(ra_interaction_hand_vs_shoulder_func_dmrs,"RA Interaction", "Hand vs Shoulder promoters","up") 
+# func_dmr_plot_maker(ra_interaction_hand_vs_shoulder_func_dmrs,"RA Interaction", "Hand vs Shoulder promoters","down") 
+# 
+# func_dmr_plot_maker(ra_interaction_knee_vs_shoulder_func_dmrs,"RA Interaction", "Knee vs Shoulder (promoters)","up") 
+# func_dmr_plot_maker(ra_interaction_knee_vs_shoulder_func_dmrs,"RA Interaction", "Knee vs Shoulder (promoters)","down") 
+# 
+# func_dmr_plot_maker(ra_interaction_knee_vs_hand_func_dmrs,"RA Interaction", "Knee vs Hand (promoters)","up") 
+# func_dmr_plot_maker(ra_interaction_knee_vs_hand_func_dmrs ,"RA Interaction", "Knee vs Hand (promoters)","down") 
+```
+
+Using DMRs with functional regions -> filtering and finding common genes
+
+```{r}
+#filtering for abs(meandiff) bigger and equal than 0.1 and getting the gene names
+ra_interaction_hand_vs_shoulder_func_dmrs_gene_set <-  ra_interaction_hand_vs_shoulder_func_dmrs %>%
+  filter(abs(meandiff) >= 0.1) %>%
+  select(gene)
+ra_interaction_hand_vs_shoulder_func_dmrs_gene_set <- as.vector(ra_interaction_hand_vs_shoulder_func_dmrs_gene_set)[[1]]
+
+ra_interaction_knee_vs_shoulder_func_dmrs_gene_set <-  ra_interaction_knee_vs_shoulder_func_dmrs %>%
+  filter(abs(meandiff) >= 0.1) %>%
+  select(gene)
+ra_interaction_knee_vs_shoulder_func_dmrs_gene_set <- as.vector(ra_interaction_knee_vs_shoulder_func_dmrs_gene_set)[[1]]
+
+ra_interaction_knee_vs_hand_func_dmrs_gene_set <-  ra_interaction_knee_vs_hand_func_dmrs %>%
+  filter(abs(meandiff) >= 0.1) %>%
+  select(gene)
+ra_interaction_knee_vs_hand_func_dmrs_gene_set <- as.vector(ra_interaction_knee_vs_hand_func_dmrs_gene_set)[[1]]
+
+venn.plot <- venn.diagram(
+  x = list(set1 = ra_interaction_hand_vs_shoulder_func_dmrs_gene_set, set2 = ra_interaction_knee_vs_shoulder_func_dmrs_gene_set, set3 = ra_interaction_knee_vs_hand_func_dmrs_gene_set),
+  category.names = c("RA Interaction\nHand vs Shoulder", "RA Interaction\nKnee vs Shoulder", "RA Interaction\nKnee vs Hand"), filename=NULL,
+  # Circles
+  lwd = 1,
+  col =  c("#C562AF","#8ACCD5","#465C88"),
+  fill = c("#C562AF50","#8ACCD550","#465C8850"),
+  cex = 1.0,
+  fontface = "bold",
+  fontfamily = "sans",       
+  cat.cex = 0.8,
+  cat.fontface = "bold",
+  cat.default.pos = "outer",
+  cat.pos = c( -27,27 , -135),
+  cat.dist = c(0.06,0.06, 0.06),
+  cat.col = c("#C562AF","#8ACCD5","#465C88"),
+  disable.logging = TRUE
+)
+# Plot Venn diagram
+ggsave(
+  plot = venn.plot,
+  filename = "vennplot_ra_interactions_comparisons.png",
+  bg = "transparent",
+  width = 5, height = 5
+)
+
+```
+
+Using DMRs with functional regions -> making heatmaps
+
+```{r}
+#making a loop over the interaction func dmr df, having the mean cpg values per patient from dmp dfs and constructing the heatmaps
+
+#filtering the dmrs by deltadeltaB values and arranging by them
+ra_interaction_hand_vs_shoulder_func_dmrs <- ra_interaction_hand_vs_shoulder_func_dmrs %>%
+    filter(abs(meandiff) >= 0.1) %>%
+    arrange(meandiff)
+
+ra_interaction_knee_vs_shoulder_func_dmrs <- ra_interaction_knee_vs_shoulder_func_dmrs %>%
+    filter(abs(meandiff) >= 0.1) %>%
+    arrange(meandiff)
+
+ra_interaction_knee_vs_hand_func_dmrs <- ra_interaction_knee_vs_hand_func_dmrs %>%
+    filter(abs(meandiff) >= 0.1) %>%
+    arrange(meandiff)
+
+#preparing the patient metadatas
+ra_hand_patients <- patients %>% filter(final_location == "hand", Final_Group == "RA")
+ra_shoulder_patients <- patients %>% filter(final_location == "shoulder", Final_Group == "RA")
+ra_knee_patients <- patients %>% filter(final_location == "knee", Final_Group == "RA")
+
+oa_hand_patients <- patients %>% filter(final_location == "hand", Final_Group == "OA")
+oa_shoulder_patients <- patients %>% filter(final_location == "shoulder", Final_Group == "OA")
+oa_knee_patients <- patients %>% filter(final_location == "knee", Final_Group == "OA")
+
+#the function
+#first argument -> filtered and arranged dmr df
+#second argument -> patient metadata list that should follow ra first joint - second joint, oa first joint - second joint
+mean_cpg_calculation_for_heatmap <- function (dmr_df, patient_metadata_list) {
+  
+  #to append the values first create empty dfs
+  ra_first_beta_means_df <- data.frame()
+  ra_second_beta_means_df <- data.frame()
+  oa_first_beta_means_df <- data.frame()
+  oa_second_beta_means_df <- data.frame()
+  
+  #to filter the betavalues df
+  ra_first_patient <- patient_metadata_list[[1]]
+  ra_second_patient <- patient_metadata_list[[2]]
+  oa_first_patient <- patient_metadata_list[[3]]
+  oa_second_patient <- patient_metadata_list[[4]]
+  
+  for (i in seq_len(nrow(dmr_df))) {
+
+    #extract leading-edge cpgs
+    cpgs <- strsplit(dmr_df$leadingEdge[i], ",\\s*")[[1]]
+    gene <- dmr_df$gene[i]
+    
+    #ra first 
+    ra_first_beta <- beta_values[cpgs, ra_first_patient$Patient_Name, drop = FALSE]
+    ra_first_beta <- as.data.frame(t(colMeans(ra_first_beta, na.rm = TRUE)))
+    rownames(ra_first_beta) <- gene
+    ra_first_beta_means_df <- rbind(ra_first_beta_means_df, ra_first_beta)
+    
+    #ra second
+    ra_second_beta <- beta_values[cpgs, ra_second_patient$Patient_Name, drop = FALSE]
+    ra_second_beta <- as.data.frame(t(colMeans(ra_second_beta, na.rm = TRUE)))
+    rownames(ra_second_beta) <- gene
+    ra_second_beta_means_df <- rbind(ra_second_beta_means_df, ra_second_beta)
+    
+    #oa first
+    oa_first_beta <- beta_values[cpgs, oa_first_patient$Patient_Name, drop = FALSE]
+    oa_first_beta <- as.data.frame(t(colMeans(oa_first_beta, na.rm = TRUE)))
+    rownames(oa_first_beta) <- gene
+    oa_first_beta_means_df <- rbind(oa_first_beta_means_df, oa_first_beta)
+    
+    #oa second
+    oa_second_beta <- beta_values[cpgs, oa_second_patient$Patient_Name, drop = FALSE]
+    oa_second_beta <- as.data.frame(t(colMeans(oa_second_beta, na.rm = TRUE)))
+    rownames(oa_second_beta) <- gene
+    oa_second_beta_means_df <- rbind(oa_second_beta_means_df, oa_second_beta)
+    } 
+  
+  #bind them and also prepare the metadata for heatmaps
+  ra_df_for_heatmap <- cbind(ra_first_beta_means_df, ra_second_beta_means_df)
+  ra_patients_metadata_for_heatmap <- rbind(ra_first_patient,ra_second_patient)
+  ra_patients_metadata_for_heatmap <- ra_patients_metadata_for_heatmap %>%
+    column_to_rownames("Patient_Name") %>%
+    select("final_location") %>%
+    rename("final_location" = "Joint")
+  
+  oa_df_for_heatmap <- cbind(oa_first_beta_means_df, oa_second_beta_means_df)
+  oa_patients_metadata_for_heatmap <- rbind(oa_first_patient,oa_second_patient)
+  oa_patients_metadata_for_heatmap <- oa_patients_metadata_for_heatmap %>%
+    column_to_rownames("Patient_Name") %>%
+    select("final_location") %>%
+    rename("final_location" = "Joint")
+  
+  return(list("ra_df_for_heatmap" = ra_df_for_heatmap,
+              "ra_patients_metadata_for_heatmap"=ra_patients_metadata_for_heatmap,
+              "oa_df_for_heatmap" = oa_df_for_heatmap,
+              "oa_patients_metadata_for_heatmap"=oa_patients_metadata_for_heatmap))
+}
+
+#compute the mean beta values for each patient 
+#it returns a list -> the first one is mean beta values, second one is metadata for that specific combination (same for ra and oa)
+ra_interaction_hand_vs_shoulder_heatmap_list <- mean_cpg_calculation_for_heatmap(ra_interaction_hand_vs_shoulder_func_dmrs, list(ra_hand_patients,ra_shoulder_patients,oa_hand_patients,oa_shoulder_patients) )
+
+ra_interaction_knee_vs_shoulder_heatmap_list <- mean_cpg_calculation_for_heatmap(ra_interaction_knee_vs_shoulder_func_dmrs, list(ra_knee_patients,ra_shoulder_patients,oa_knee_patients,oa_shoulder_patients) )
+
+ra_interaction_knee_vs_hand_func_dmrs <- mean_cpg_calculation_for_heatmap(ra_interaction_knee_vs_hand_func_dmrs, list(ra_knee_patients,ra_hand_patients,oa_knee_patients,oa_hand_patients) )
+
+#to draw the heatmap
+#the first argument is the dmr heatmap list that was returned by mean_cpg_calculation_for_heatmap function
+#the second argument is the joint vs joint string
+dmr_heatmap_maker <- function(dmr_heatmap_list,string1){
+  
+  # Heatmaps
+  p1 <- pheatmap(dmr_heatmap_list[[1]], cluster_rows = FALSE, 
+                 cluster_cols = FALSE, silent =TRUE,
+                 annotation_col = dmr_heatmap_list[[2]],annotation_legend = FALSE,
+                 #fontsize_row = 7,
+                 show_rownames = FALSE,
+                 scale = "row" 
+                 #main = paste0("RA ", string1),
+                 #main= NULL
+                 )
+  
+  p2 <- pheatmap(dmr_heatmap_list[[3]], cluster_rows = FALSE, 
+                 cluster_cols = FALSE, silent =TRUE,
+                 annotation_col = dmr_heatmap_list[[4]],annotation_legend = FALSE,
+                 #fontsize_row = 7,
+                 show_rownames = FALSE,
+                 scale = "row"
+                 #main = paste0("OA ", string1),
+                 #main = NULL
+                 )
+  
+  #to ensure that the heights of the two pheatmap plots (p1 and p2) are equal
+  g1 <- p1$gtable
+  g2 <- p2$gtable
+  g1$heights <- g2$heights <- unit.pmax(g1$heights, g2$heights)
+  heatmap <- arrangeGrob(g1, g2, ncol = 2)
+  
+  #when you ensure the heigths of the two plots are equal, title is being cut off
+  #so we add title afterwards 
+  #not the best solution
+  heatmap <- arrangeGrob(
+    grid::textGrob(paste0("RA Interaction ", string1, " Heatmap"),
+                   gp = gpar(fontsize = 13, fontface = "bold")),
+    heatmap,
+    ncol = 1,
+    heights = unit.c(unit(1, "lines"), unit(1, "null"))
+  )
+  
+  ggsave(
+    plot = heatmap,
+    filename = paste0("RA Interaction_",string1,"_heatmap.png"),
+    bg = "transparent",
+    width = 6, height = 5)
+}
+
+dmr_heatmap_maker(ra_interaction_hand_vs_shoulder_heatmap_list, "Hand vs Shoulder")
+dmr_heatmap_maker(ra_interaction_knee_vs_shoulder_heatmap_list, "Knee vs Shoulder")
+dmr_heatmap_maker(ra_interaction_knee_vs_hand_func_dmrs, "Knee vs Hand")
+
+```
+
+
